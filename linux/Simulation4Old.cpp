@@ -741,8 +741,8 @@ void createHistogram(double binSize, int totalParticles, int particlesType1,
 
 	ofstream histoFile;
 	char string[64];
-	printf_s(string, sizeof(string), "histoFile%4.3f.txt", currentTime);
-//	sprintf(string, "histoFile%4.3f.txt", currentTime);
+//	printf_s(string, sizeof(string), "histoFile%4.3f.txt", currentTime);
+	sprintf(string, "histoFile%4.3f.txt", currentTime);
 	histoFile.open(string);
 	for (int i = 0; i < maxSize; i++)
 	{

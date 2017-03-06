@@ -70,7 +70,7 @@ void createHistogram(double binSize, int totalParticles, int particlesType1,
 	int rightBoundary);
 
 //The main function to execute the simulation
-int main2()
+int main()
 {
 	clock_t tstart = clock();
 	/*CONSTANTS FOR REFERENCE THESE ARE HARDCODED*/

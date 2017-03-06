@@ -81,7 +81,7 @@ void saveStateToFile(ofstream& loadStateFile, double* positionX,
 	int totalParticles);
 
 //The main function to execute the simulation
-int main3(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
 	/*CONSTANTS FOR REFERENCE THESE ARE HARDCODED*/
 //constants 0.5(sigma1 + sigma2)
@@ -741,8 +741,8 @@ void createHistogram(double binSize, int totalParticles, int particlesType1,
 
 	ofstream histoFile;
 	char string[64];
-	sprintf_s(string, sizeof(string), "histoFile%4.3f.txt", currentTime);
-	//sprintf(string, "histoFile%4.3f.txt", currentTime);
+	//sprintf_s(string, sizeof(string), "histoFile%4.3f.txt", currentTime);
+	sprintf(string, "histoFile%4.3f.txt", currentTime);
 	histoFile.open(string);
 	for (int i = 0; i < maxSize; i++)
 	{
