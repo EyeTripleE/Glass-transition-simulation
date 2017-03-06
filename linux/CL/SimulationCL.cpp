@@ -644,6 +644,23 @@ void outputData(Parameters &params, const char* time_string)
 	clEnqueueUnmapMemObject(params.command_queue, params.oldPositionBuffer, oldPosPointer, NULL, NULL, NULL);
 }
 
+size_t get_nextpowerof2(size_t n)
+{
+	/*
+	* Below indicates passed no is a power of 2, so return the same.
+	*/
+	if (!(n & (n - 1))) {
+		return (n);
+	}
+
+	while (n & (n - 1)) {
+		n &= n - 1;
+	}
+	n <<= 1;
+
+	return n;
+}
+
 /*
 void outputSettings()
 {
@@ -663,7 +680,7 @@ void outputSettings()
 	// If you're not interested in namespaces (and most of the time I'm not),
 	// just use the following line instead of the one above...
 	pDOMDocument = pDOMImplementation->createDocument(0, L"Hello_World", 0);
-
+*/
 	/*
 	=============================================================
 	Anything below this point is optional,
@@ -679,6 +696,7 @@ void outputSettings()
 	interchangably. Nodes are the base class,
 	and Elements are the specilizations.
 	*/
+/*
 	xercesc::DOMElement * pRootElement = NULL;
 	pRootElement = pDOMDocument->getDocumentElement();
 
@@ -725,13 +743,14 @@ void outputSettings()
 	// Create some sample data.
 	_itow_s(1, wcharBuffer, 128, 10);
 	pRow->setAttribute(L"index", wcharBuffer);
-
+*/
 	/*
 	Create a text node and append this as well. Some people
 	prefer to place their data in the text node
 	which is perfectly valid, others prefer to use
 	the attributes. A combination of the two is quite common.
 	*/
+/*
 	xercesc::DOMText* pTextNode = NULL;
 	pTextNode = pDOMDocument->createTextNode(L"Comments and"
 		L" data can also go in text nodes.");
@@ -758,9 +777,9 @@ void outputSettings()
 	pDOMDocument->release();
 	xercesc::XMLPlatformUtils::Terminate();
 }
-
+*/
 //! \brief Save the DOM Document to the File System.
-
+/*
 void DoOutput2File(xercesc::DOMDocument* pDOMDocument, const wchar_t * FullFilePath)
 {
 	xercesc::DOMImplementation *pImplement = NULL;
@@ -800,20 +819,3 @@ void DoOutput2File(xercesc::DOMDocument* pDOMDocument, const wchar_t * FullFileP
 	pSerializer->release();
 }
 */
-
-size_t get_nextpowerof2(size_t n)
-{
-	/*
-	* Below indicates passed no is a power of 2, so return the same.
-	*/
-	if (!(n & (n - 1))) {
-		return (n);
-	}
-
-	while (n & (n - 1)) {
-		n &= n - 1;
-	}
-	n <<= 1;
-
-	return n;
-}
