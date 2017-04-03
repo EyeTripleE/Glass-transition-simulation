@@ -326,7 +326,7 @@ void applyPeriodicBoundary(double &position, double &oldPosition, const double b
 //Since the values would be in the cache.
 void outputPosition(std::ofstream &positionFile, const double currentTime, double (*position)[3], const int totalParticles)
 {	
-	std::string str = " 0 0 0 0 0 0 0 0 0 0\n";
+	std::string str = " 0 0 0 0 0 0 0 0 0\n";
 	positionFile << "* " << currentTime << "\n";
 	for (int i = 0; i < totalParticles; ++i)
 	{
