@@ -9,7 +9,6 @@
 #include <ctime>
 #include <fstream>
 #include <random>
-#include <ctime>
 
 //Calculates force on each particle based on the present position of all particles
 //Cutoff distance of 4.0 units. 
