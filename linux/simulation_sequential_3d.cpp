@@ -20,21 +20,27 @@ void calcAcceleration(double (*acceleration)[3], double (*position)[3], double t
 //Function that performs the Euler algorithm on all particles in the set
 void performEulerOperation(int totalParticles, double (*position)[3],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
-    double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
+	double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
 	double (*velocity)[3], double timestep);
 
 //Function that performs the Verlet algorithm on all particles in the set
 void performVerletOperation(int totalParticles, double (*position)[3],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
-    double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
+	double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
 	double (*velocity)[3], double timestep, double halfInvTimestep);
 
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
-double determineVector(const double p1Pos, const double p2Pos, const double size);
+double determineVectorPeriodic(const double p1Pos, const double p2Pos, const double size);
+
+//Vector from particle 1 to particle 2 in one direction
+double determineVectorFlat(const double p1Pos, const double p2Pos);
 
 //Translates particles that have exited the simulation area back into the 
 //Simulation region, works in one direction so do for every direction
 void applyPeriodicBoundary(double &position, double &oldPosition, const double boundary);
+
+//Bounce particle off wall
+void applySolidBoundary(double &position, double &oldPosition, const double boundary);
 
 //Outputs to position file
 void outputPosition(std::ofstream &positionFile, const double currentTime, double (*position)[3], const int totalParticles);
@@ -43,7 +49,7 @@ void cleanup(std::ofstream &positionFile, std::ofstream &energyFile, double (*po
 	double (*oldPosition)[3], double (*velocity)[3], double (*acceleration)[3])
 {
 	delete[] position, velocity, acceleration, oldPosition;
-    positionFile.close();
+	positionFile.close();
 	energyFile.close();
 }
 
@@ -73,8 +79,7 @@ int main()
 	int numParticlesType2 = 0;
 	int totalParticles = numParticlesType1 + numParticlesType2;
 
-	double potentialEnergy;
-	double kineticEnergy;
+	double potentialEnergy, kineticEnergy, totalEnergy;
 
 	//THIS MUST BE MODIFIED IF YOU USE MORE PARTICLES
 	double boundaries[] = {50.0, 50.0, 50.0}; //{upper bound of x, upper bound of y, upper bound of z}
@@ -119,7 +124,7 @@ int main()
 			norm = 0;
 			for(int k = 0; k < 3; k++)
 			{	
-				dist = determineVector(position[i][k], position[j][k], boundaries[k]);
+				dist = determineVectorFlat(position[i][k], position[j][k]);
 				norm += dist*dist;
 			}
 			norm = sqrt(norm);
@@ -134,16 +139,15 @@ int main()
 	}
 	if(count >= maxIter)
 	{
-		printf("Maximum iteration reached when attempting to place particles. Try using a larger domain\n");
+		printf("Maximum iteration reached when attempting to place particles. Try using a larger domain.\n");
 		cleanup(positionFile, energyFile, position, velocity, acceleration, oldPosition);
 		exit(1);
 	}
 
 	//Start of simulation - setting initial time to zero
 	double currentTime = 0;
-	double totalEnergy;
 
-    outputPosition(positionFile, currentTime, position, totalParticles);
+    	outputPosition(positionFile, currentTime, position, totalParticles);
 
 	//Perform initial Euler operation to set things in motion
 	performEulerOperation(totalParticles, position, numParticlesType1, potentialEnergy,
@@ -193,14 +197,14 @@ void calcAcceleration(double (*acceleration)[3], double (*position)[3], double t
 		acceleration[i][2] = 0.0;
 	}
 	
-    int j;
+    	int j;
 	for (int i = 0; i < totalParticles; i++)
 	{
 		for (j = 0; j < i; j++)
 		{
-            xvector = determineVector(position[i][0], position[j][0], boundaries[0]);
-            yvector = determineVector(position[i][1], position[j][1], boundaries[1]);
-			zvector = determineVector(position[i][2], position[j][2], boundaries[2]);
+            		xvector = determineVectorFlat(position[i][0], position[j][0]);
+            		yvector = determineVectorFlat(position[i][1], position[j][1]);
+			zvector = determineVectorFlat(position[i][2], position[j][2]);
 			pythagorean = ((yvector * yvector) + (xvector * xvector) + (zvector * zvector));
 
 			if (pythagorean < 16.0)
@@ -241,7 +245,7 @@ void calcAcceleration(double (*acceleration)[3], double (*position)[3], double t
 
 void performEulerOperation(int totalParticles, double (*position)[3],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
-    double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
+	double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
 	double (*velocity)[3], double timestep)
 {
 	calcAcceleration(acceleration, position, totalParticles, particlesType1, potentialEnergy, boundaries);
@@ -258,7 +262,7 @@ void performEulerOperation(int totalParticles, double (*position)[3],
 			position[i][j] += (velocity[i][j] * timestep);
 			velocity[i][j] += (acceleration[i][j] * timestep);
 
-            applyPeriodicBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
+            		applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
 			dotProd += velocity[i][j] * velocity[i][j];
 		}
 
@@ -268,7 +272,7 @@ void performEulerOperation(int totalParticles, double (*position)[3],
 
 void performVerletOperation(int totalParticles, double (*position)[3],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
-    double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
+	double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
 	double (*velocity)[3], double timestep, double halfInvTimestep)
 {
 	calcAcceleration(acceleration, position, totalParticles, particlesType1, potentialEnergy, boundaries);
@@ -276,36 +280,41 @@ void performVerletOperation(int totalParticles, double (*position)[3],
 	double currentPosition;
 	double currentDisplacement;
 	double futureDisplacement;
-    double dtsq = timestep*timestep;
+	double dtsq = timestep*timestep;
 	double dotProd;
-    int j;
+	int j;
 	kineticEnergy = 0;
 
 	for (int i = 0; i < totalParticles; i++)
 	{
 		// Vector Verlet Method, unroll the loops?
 		dotProd = 0;
-        for(j = 0; j < 3; ++j) //Loop over all directions
-			{
-				currentDisplacement = position[i][j] - oldPosition[i][j];
-				futureDisplacement = currentDisplacement + (dtsq * acceleration[i][j]);
-				currentPosition = position[i][j];
-				position[i][j] = position[i][j] + futureDisplacement;
-				velocity[i][j] = (position[i][j] - oldPosition[i][j]) * (halfInvTimestep);
-				oldPosition[i][j] = currentPosition;
+        	for(j = 0; j < 3; ++j) //Loop over all directions
+		{
+			currentDisplacement = position[i][j] - oldPosition[i][j];
+			futureDisplacement = currentDisplacement + (dtsq * acceleration[i][j]);
+			currentPosition = position[i][j];
+			position[i][j] = position[i][j] + futureDisplacement;
+			velocity[i][j] = (position[i][j] - oldPosition[i][j]) * (halfInvTimestep);
+			oldPosition[i][j] = currentPosition;
 
-                applyPeriodicBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
-				dotProd += velocity[i][j] * velocity[i][j];
-			}
+        		applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
+			dotProd += velocity[i][j] * velocity[i][j];
+		}
 
 		kineticEnergy += (i < particlesType1) ? 0.5 * dotProd : dotProd;
 	}
 }
 
-double determineVector(const double p1Pos, const double p2Pos, const double size)
+double determineVectorPeriodic(const double p1Pos, const double p2Pos, const double size)
 {
     double ds = p1Pos - p2Pos;
-	return (fabs(ds) > 0.5 * size) ? (ds - copysign(size, ds)) : ds;
+    return (fabs(ds) > 0.5 * size) ? (ds - copysign(size, ds)) : ds;
+}
+
+double determineVectorFlat(const double p1Pos, const double p2Pos)
+{
+	return p1Pos - p2Pos;
 }
 
 void applyPeriodicBoundary(double &position, double &oldPosition, const double boundary)
@@ -319,6 +328,20 @@ void applyPeriodicBoundary(double &position, double &oldPosition, const double b
 	{
 		position += boundary;
 		oldPosition += boundary;
+	}
+}
+
+void applySolidBoundary(double &position, double &oldPosition, const double boundary)
+{
+	if(position > boundary)
+	{
+		position -= 2*(position - boundary);
+		oldPosition -= 2*(oldPosition - boundary);
+	}
+	else if(position < 0.0)
+	{
+		position -= 2*position;
+		oldPosition -= 2*oldPosition;
 	}
 }
 
