@@ -147,11 +147,11 @@ int main()
 	//Start of simulation - setting initial time to zero
 	double currentTime = 0;
 
-    	outputPosition(positionFile, currentTime, position, totalParticles);
+    outputPosition(positionFile, currentTime, position, totalParticles);
 
 	//Perform initial Euler operation to set things in motion
 	performEulerOperation(totalParticles, position, numParticlesType1, potentialEnergy,
-		kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep);
+	kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep);
     
 	totalEnergy = kineticEnergy + potentialEnergy;
 	outputPosition(positionFile, currentTime, position, totalParticles);
@@ -162,7 +162,7 @@ int main()
 	for (currentTime = timestep; currentTime < maxTime; currentTime += timestep)
 	{
 		performVerletOperation(totalParticles, position, numParticlesType1, potentialEnergy,
-			kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep, halfInvTimestep);
+		kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep, halfInvTimestep);
 
 		count = (count + 1) % 10; //Can set print interval arbitrarily
 		if(count == 0)
@@ -197,13 +197,13 @@ void calcAcceleration(double (*acceleration)[3], double (*position)[3], double t
 		acceleration[i][2] = 0.0;
 	}
 	
-    	int j;
+    int j;
 	for (int i = 0; i < totalParticles; i++)
 	{
 		for (j = 0; j < i; j++)
 		{
-            		xvector = determineVectorFlat(position[i][0], position[j][0]);
-            		yvector = determineVectorFlat(position[i][1], position[j][1]);
+			xvector = determineVectorFlat(position[i][0], position[j][0]);
+			yvector = determineVectorFlat(position[i][1], position[j][1]);
 			zvector = determineVectorFlat(position[i][2], position[j][2]);
 			pythagorean = ((yvector * yvector) + (xvector * xvector) + (zvector * zvector));
 
@@ -262,7 +262,7 @@ void performEulerOperation(int totalParticles, double (*position)[3],
 			position[i][j] += (velocity[i][j] * timestep);
 			velocity[i][j] += (acceleration[i][j] * timestep);
 
-            		applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
+            applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
 			dotProd += velocity[i][j] * velocity[i][j];
 		}
 
@@ -298,7 +298,7 @@ void performVerletOperation(int totalParticles, double (*position)[3],
 			velocity[i][j] = (position[i][j] - oldPosition[i][j]) * (halfInvTimestep);
 			oldPosition[i][j] = currentPosition;
 
-        		applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
+        	applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
 			dotProd += velocity[i][j] * velocity[i][j];
 		}
 
@@ -333,6 +333,7 @@ void applyPeriodicBoundary(double &position, double &oldPosition, const double b
 
 void applySolidBoundary(double &position, double &oldPosition, const double boundary)
 {
+	//If pass in both axis boundaries, could do this with one if statement
 	if(position > boundary)
 	{
 		position -= 2*(position - boundary);
@@ -353,6 +354,6 @@ void outputPosition(std::ofstream &positionFile, const double currentTime, doubl
 	positionFile << "* " << currentTime << "\n";
 	for (int i = 0; i < totalParticles; ++i)
 	{
-		positionFile << position[i][0] << " " << position[i][1] << " " << position[i][2]	<< str;
+		positionFile << position[i][0] << " " << position[i][1] << " " << position[i][2] << str;
 	}
 }
