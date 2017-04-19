@@ -9,6 +9,170 @@
 #include <ctime>
 #include <fstream>
 #include <random>
+#include <vector>
+
+//===================================BEGIN TREE STUFF=========================================
+
+struct Node{
+	int particleIndex;
+	double mass, com[3];
+};
+
+class Tree{
+	
+	std::vector<Node> nodesArray;
+	
+	public:
+		Tree(double (*position)[3], int numParticles, double boundaries[3])
+		{
+			std::vector<int> indices(numParticles);
+			for(int i = 0; i < numParticles; i++)
+				indices[i] = i;
+			double bound[6] = {0.0, boundaries[0], 0.0, boundaries[1], 0.0, boundaries[2]};		
+			buildTree(0, position, indices, bound);
+		};
+	
+	private:
+	//For parallel construction, Give each thread 1/n particles, have place into k (8 or 64) blocks. Merge the results. 
+	//(Or just do that on the master thread)
+	//Then spin up k processes to create
+	//an array based tree. Merge the trees. 
+	void buildTree(int nodeIndex, double (*position)[3], std::vector<int> &partIndices, double boundaries[6])
+	{	
+            //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
+            //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
+		if(partIndices.size() == 0)
+		{
+                  if(nodeIndex >= nodesArray.size())
+                       nodesArray.resize(nodeIndex + 1);
+			nodesArray[nodeIndex].particleIndex = -1;
+		}
+		else if(partIndices.size() == 1)
+		{
+                  if(nodeIndex >= nodesArray.size())
+                       nodesArray.resize(nodeIndex + 1);
+			nodesArray[nodeIndex].particleIndex = partIndices[0];
+			//Assume equivalent mass, otherwise will need to modify
+			nodesArray[nodeIndex].mass = 1.0;
+			for(int i = 0; i < 3; i++)
+				nodesArray[nodeIndex].com[i] = position[partIndices[0]][i];		
+		}
+		else
+		{
+			//Assuming mass of one, sum mass
+                  if(nodeIndex >= nodesArray.size())
+                       nodesArray.resize(nodeIndex + 1);
+
+			nodesArray[nodeIndex].mass = partIndices.size();
+			//Assuming mass of one, average location
+			for(int j = 0; j < 3; j++)
+				nodesArray[nodeIndex].com[j] = 0.0;
+			for(int i = 0; i < partIndices.size(); i++)
+			{
+				for(int j = 0; j < 3; j++)
+				{
+					nodesArray[nodeIndex].com[j] += position[partIndices[i]][j]; 
+				}
+			}
+			for(int j = 0; j < 3; j++)
+				nodesArray[nodeIndex].com[j] /= partIndices.size();
+			
+			std::vector<int> indicesArray[8];
+			
+			//Create new boundaries
+			double halfX = 0.5*(boundaries[1] + boundaries[0]);
+			double halfY = 0.5*(boundaries[3] + boundaries[2]);
+			double halfZ = 0.5*(boundaries[5] + boundaries[4]);
+			double boundaryArray[8][6] = {{boundaries[0],halfX,boundaries[2],halfY,boundaries[4],halfZ},//bottom, front, left
+							      {boundaries[0],halfX,boundaries[2],halfY,halfZ,boundaries[5]},
+							      {boundaries[0],halfX,halfY,boundaries[3],boundaries[4],halfZ},
+							      {boundaries[0],halfX,halfY,boundaries[3],halfZ,boundaries[5]},
+                                                {halfX,boundaries[1],boundaries[2],halfY,boundaries[4],halfZ},
+							      {halfX,boundaries[1],boundaries[2],halfY,halfZ,boundaries[5]},
+							      {halfX,boundaries[1],halfY,boundaries[3],boundaries[4],halfZ},
+                                                {halfX,boundaries[1],halfY,boundaries[3],halfZ,boundaries[5]}};
+
+			//Subdivide the indices based on boundaries
+			for(int i = 0; i < partIndices.size(); i++)
+			{
+				if(position[partIndices[i]][0] < halfX) //Bottom
+				{
+					if(position[partIndices[i]][1] < halfY) //Left
+					{
+						if(position[partIndices[i]][2] < halfZ) //Front
+						{
+							indicesArray[0].push_back(partIndices[i]);
+						}
+						else //Back
+						{
+							indicesArray[1].push_back(partIndices[i]);
+						}				
+					}
+					else //Right
+					{
+						if(position[partIndices[i]][2] < halfZ) //Front
+						{
+							indicesArray[2].push_back(partIndices[i]);
+						}
+						else //Back
+						{
+							indicesArray[3].push_back(partIndices[i]);
+						}
+					}
+				}
+				else //Top
+				{
+					if(position[partIndices[i]][1] < halfY) //Left
+					{
+						if(position[partIndices[i]][2] < halfZ) //Front
+						{
+							indicesArray[4].push_back(partIndices[i]);				
+						}
+						else //Back
+						{
+							indicesArray[5].push_back(partIndices[i]);
+						}				
+					}
+					else //Right
+					{
+						if(position[partIndices[i]][2] < halfZ) //Front
+						{
+							indicesArray[6].push_back(partIndices[i]);				
+						}
+						else //Back
+						{
+							indicesArray[7].push_back(partIndices[i]);
+						}
+					}
+				}
+			}			
+									
+			//Build tree based on subdivisions
+			for(int i = 0; i < 8; i++)
+				buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i]);
+		}
+	}
+
+      /*
+      calcAcc(int nodeIndex, int partIndex, double (*position)[3], double acceleration[3])
+      {
+            double distance = 0;
+            double val;
+            for(int i = 0; i < 3; i++)
+                  val = determineVectorFlat(position[partIndex][i], nodesArray[nodeIndex].com[i]) 
+                  distance += val*val;
+
+            
+            //mass/distance < 0.5 then ignore internal structure
+            //Check if ratio is less than cutoff
+            //If it is not -> look at children unless we've reached a leaf node (in which case calculate), if at leaf node make sure not looking at self
+            //If it is greater, calculate the accleration
+      }
+      */
+      
+};
+
+//============================END TREE STUFF============================================
 
 //Calculates force on each particle based on the present position of all particles
 //Cutoff distance of 4.0 units. 
@@ -144,10 +308,12 @@ int main()
 		exit(1);
 	}
 
+      Tree tree(position, totalParticles, boundaries);
+      /*
 	//Start of simulation - setting initial time to zero
 	double currentTime = 0;
 
-    outputPosition(positionFile, currentTime, position, totalParticles);
+      outputPosition(positionFile, currentTime, position, totalParticles);
 
 	//Perform initial Euler operation to set things in motion
 	performEulerOperation(totalParticles, position, numParticlesType1, potentialEnergy,
@@ -174,7 +340,8 @@ int main()
 	}
 
 	printf("%g\n", (double)(clock() - tstart) / CLOCKS_PER_SEC);
-
+      */
+      
 	cleanup(positionFile, energyFile, position, velocity, acceleration, oldPosition);
 	return 0;
 }
@@ -189,7 +356,7 @@ void calcAcceleration(double (*acceleration)[3], double (*position)[3], double t
 	double forceX, forceY, forceZ, forceCoeff;
 	potentialEnergy = 0;
 	
-	//Zero out acceleration, can't do this inside the mian loop because we also access the jth entry
+	//Zero out acceleration, can't do this inside the main loop because we also access the jth entry
 	for(int i = 0; i < totalParticles; i++)
 	{
 		acceleration[i][0] = 0.0;
@@ -197,7 +364,7 @@ void calcAcceleration(double (*acceleration)[3], double (*position)[3], double t
 		acceleration[i][2] = 0.0;
 	}
 	
-    int j;
+      int j;
 	for (int i = 0; i < totalParticles; i++)
 	{
 		for (j = 0; j < i; j++)
@@ -243,6 +410,21 @@ void calcAcceleration(double (*acceleration)[3], double (*position)[3], double t
 	}   
 }
 
+/*
+void calcAcceleration(double (*acceleration)[3], double (*position)[3], double totalParticles, 
+	double particlesType1, double& potentialEnergy, double* boundaries, Tree &tree)
+{
+      //Zero out current acceleration
+	for(int i = 0; i < totalParticles; i++)
+	{
+		acceleration[i][0] = 0.0;
+		acceleration[i][1] = 0.0;
+		acceleration[i][2] = 0.0;
+            tree.calcAcc(0, i, position, acceleration[i])
+	}
+}
+*/
+
 void performEulerOperation(int totalParticles, double (*position)[3],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
 	double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
@@ -262,7 +444,7 @@ void performEulerOperation(int totalParticles, double (*position)[3],
 			position[i][j] += (velocity[i][j] * timestep);
 			velocity[i][j] += (acceleration[i][j] * timestep);
 
-            applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
+                  applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
 			dotProd += velocity[i][j] * velocity[i][j];
 		}
 
