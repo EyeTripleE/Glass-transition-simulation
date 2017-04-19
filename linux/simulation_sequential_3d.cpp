@@ -10,12 +10,13 @@
 #include <fstream>
 #include <random>
 #include <vector>
+#define DIM 3
 
 //===================================BEGIN TREE STUFF=========================================
 
 struct Node{
 	int particleIndex;
-	double mass, com[3];
+	double mass, com[DIM];
 };
 
 class Tree{
@@ -23,7 +24,7 @@ class Tree{
 	std::vector<Node> nodesArray;
 	
 	public:
-		Tree(double (*position)[3], int numParticles, double boundaries[3])
+		Tree(double (*position)[DIM], int numParticles, double boundaries[DIM])
 		{
 			std::vector<int> indices(numParticles);
 			for(int i = 0; i < numParticles; i++)
@@ -37,7 +38,7 @@ class Tree{
 	//(Or just do that on the master thread)
 	//Then spin up k processes to create
 	//an array based tree. Merge the trees. 
-	void buildTree(int nodeIndex, double (*position)[3], std::vector<int> &partIndices, double boundaries[6])
+	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double boundaries[6])
 	{	
             //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
             //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
@@ -54,7 +55,7 @@ class Tree{
 			nodesArray[nodeIndex].particleIndex = partIndices[0];
 			//Assume equivalent mass, otherwise will need to modify
 			nodesArray[nodeIndex].mass = 1.0;
-			for(int i = 0; i < 3; i++)
+			for(int i = 0; i < DIM; i++)
 				nodesArray[nodeIndex].com[i] = position[partIndices[0]][i];		
 		}
 		else
@@ -63,18 +64,19 @@ class Tree{
                   if(nodeIndex >= nodesArray.size())
                        nodesArray.resize(nodeIndex + 1);
 
+                  nodesArray[nodeIndex].particleIndex = -2;
 			nodesArray[nodeIndex].mass = partIndices.size();
 			//Assuming mass of one, average location
-			for(int j = 0; j < 3; j++)
+			for(int j = 0; j < DIM; j++)
 				nodesArray[nodeIndex].com[j] = 0.0;
 			for(int i = 0; i < partIndices.size(); i++)
 			{
-				for(int j = 0; j < 3; j++)
+				for(int j = 0; j < DIM; j++)
 				{
 					nodesArray[nodeIndex].com[j] += position[partIndices[i]][j]; 
 				}
 			}
-			for(int j = 0; j < 3; j++)
+			for(int j = 0; j < DIM; j++)
 				nodesArray[nodeIndex].com[j] /= partIndices.size();
 			
 			std::vector<int> indicesArray[8];
@@ -153,15 +155,61 @@ class Tree{
 		}
 	}
 
-      /*
-      calcAcc(int nodeIndex, int partIndex, double (*position)[3], double acceleration[3])
+
+      /*      
+      void calcAcc(int nodeIndex, int partIndex, double (*position)[DIM], double acceleration[DIM])
       {
+            
+            
             double distance = 0;
             double val;
-            for(int i = 0; i < 3; i++)
+            for(int i = 0; i < DIM; i++)
                   val = determineVectorFlat(position[partIndex][i], nodesArray[nodeIndex].com[i]) 
                   distance += val*val;
+            distance = sqrt(distance);
 
+            double s = nodesArray[nodeIndex].mass/distance;
+
+            if(nodesArray[nodeIndex].particleIndex == -1)
+            {
+                  return;
+            }
+            else if(nodesArray[nodeIndex].particleIndex >= 0)
+            {
+                  double xvector = determineVectorFlat(position[i][0], position[j][0]);
+			double yvector = determineVectorFlat(position[i][1], position[j][1]);
+			double zvector = determineVectorFlat(position[i][2], position[j][2]);
+			pythagorean = ((yvector * yvector) + (xvector * xvector) + (zvector * zvector));
+
+			if (pythagorean < 16.0)
+			{
+				//Force derived from Lennard-Jones potential
+				sigma = (i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);				
+				sigmaPow6 = sigma*sigma;//Use sigmaPow6 as to hold the square temporarily
+				sigmaPow6 = sigmaPow6*sigmaPow6*sigmaPow6;
+				sigmaPow12 = sigmaPow6*sigmaPow6;
+				invPy = 1.0 / pythagorean;
+				invPyPow3 = invPy*invPy*invPy;
+				invPyPow4 = invPyPow3*invPy;
+				invPyPow6 = invPyPow3*invPyPow3;
+				forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);				
+
+				forceX = forceCoeff * xvector;
+				forceY = forceCoeff * yvector;
+				forceZ = forceCoeff * zvector;
+				acceleration[i][0] += forceX;
+				acceleration[i][1] += forceY;
+				acceleration[i][2] += forceZ;
+				//Factor of four because only calculating half of interactions, so need to double PE
+				potentialEnergy += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
+			}
+            }
+            else
+            {
+                  if()
+            }
+
+            
             
             //mass/distance < 0.5 then ignore internal structure
             //Check if ratio is less than cutoff
@@ -178,20 +226,20 @@ class Tree{
 //Cutoff distance of 4.0 units. 
 //Then calculates the acceleration of each particle based on the force
 //currently applied to it.
-void calcAcceleration(double (*acceleration)[3], double (*position)[3], double totalParticles, 
+void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
 	double particlesType1, double& potentialEnergy, double* boundaries);
 
 //Function that performs the Euler algorithm on all particles in the set
-void performEulerOperation(int totalParticles, double (*position)[3],
+void performEulerOperation(int totalParticles, double (*position)[DIM],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
-	double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
-	double (*velocity)[3], double timestep);
+	double* boundaries, double (*oldPosition)[DIM], double (*acceleration)[DIM],
+	double (*velocity)[DIM], double timestep);
 
 //Function that performs the Verlet algorithm on all particles in the set
-void performVerletOperation(int totalParticles, double (*position)[3],
+void performVerletOperation(int totalParticles, double (*position)[DIM],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
-	double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
-	double (*velocity)[3], double timestep, double halfInvTimestep);
+	double* boundaries, double (*oldPosition)[DIM], double (*acceleration)[DIM],
+	double (*velocity)[DIM], double timestep, double halfInvTimestep);
 
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
 double determineVectorPeriodic(const double p1Pos, const double p2Pos, const double size);
@@ -207,10 +255,10 @@ void applyPeriodicBoundary(double &position, double &oldPosition, const double b
 void applySolidBoundary(double &position, double &oldPosition, const double boundary);
 
 //Outputs to position file
-void outputPosition(std::ofstream &positionFile, const double currentTime, double (*position)[3], const int totalParticles);
+void outputPosition(std::ofstream &positionFile, const double currentTime, double (*position)[DIM], const int totalParticles);
 
-void cleanup(std::ofstream &positionFile, std::ofstream &energyFile, double (*position)[3], 
-	double (*oldPosition)[3], double (*velocity)[3], double (*acceleration)[3])
+void cleanup(std::ofstream &positionFile, std::ofstream &energyFile, double (*position)[DIM], 
+	double (*oldPosition)[DIM], double (*velocity)[DIM], double (*acceleration)[DIM])
 {
 	delete[] position, velocity, acceleration, oldPosition;
 	positionFile.close();
@@ -236,7 +284,7 @@ int main()
 	energyFile.open("energy.txt");
 
 	double timestep = 0.005; //Can be arbitrarily small
-	double maxTime = 1; //Can be arbitrarily long or short
+	double maxTime = 10; //Can be arbitrarily long or short
 	double halfInvTimestep = 0.5/timestep; //needed for Verlet
 
 	int numParticlesType1 = 1024;
@@ -249,23 +297,20 @@ int main()
 	double boundaries[] = {50.0, 50.0, 50.0}; //{upper bound of x, upper bound of y, upper bound of z}
 
 	//Particle information arrays
-	double (*position)[3] = new double[totalParticles][3];
-	double (*velocity)[3] = new double[totalParticles][3];
-	double (*oldPosition)[3] = new double[totalParticles][3];
-	double (*acceleration)[3] = new double[totalParticles][3];
+	double (*position)[DIM] = new double[totalParticles][DIM];
+	double (*velocity)[DIM] = new double[totalParticles][DIM];
+	double (*oldPosition)[DIM] = new double[totalParticles][DIM];
+	double (*acceleration)[DIM] = new double[totalParticles][DIM];
 
 	std::default_random_engine generator((unsigned)time(NULL));
 	std::normal_distribution<double> normalDistribution(0.0, 0.5);
-	std::uniform_real_distribution<double> uniformDistributionX(0.0, boundaries[0]);
-	std::uniform_real_distribution<double> uniformDistributionY(0.0, boundaries[1]);
-	std::uniform_real_distribution<double> uniformDistributionZ(0.0, boundaries[2]);
+      std::uniform_real_distribution<double> uniformDistribution[DIM];
+      for(int i = 0; i < DIM; i++)
+            uniformDistribution[i] = std::uniform_real_distribution<double>(0.0, boundaries[i]);
 	
 	for(int i = 0; i < totalParticles; i++)
-	{
-		velocity[i][0] = normalDistribution(generator);
-		velocity[i][1] = normalDistribution(generator);
-		velocity[i][2] = normalDistribution(generator);		
-	}
+            for(int j = 0; j < DIM; j++)
+                  velocity[i][j] = normalDistribution(generator);
 
 	double minSpacing = 1.0;//Be careful with this parameter, energy is really high when this is small
 	double maxIter = 50;
@@ -279,16 +324,16 @@ int main()
 	{		
 		count = (i != oldi) ? 0 : count + 1; //If this is a particle we've already moved, add one to count
 		oldi = i;
-		position[i][0] = uniformDistributionX(generator);
-		position[i][1] = uniformDistributionY(generator);
-		position[i][2] = uniformDistributionZ(generator);
+            for(int j = 0; j < DIM; j++)
+                  position[i][j] = uniformDistribution[j](generator);
 	
 		for(int j = 0; j < i; j++)
 		{
 			norm = 0;
-			for(int k = 0; k < 3; k++)
+			for(int k = 0; k < DIM; k++)
 			{	
-				dist = determineVectorFlat(position[i][k], position[j][k]);
+				//dist = determineVectorPeriodic(position[i][k], position[j][k], boundaries[k]);
+                        dist = determineVectorFlat(position[i][k], position[j][k]);
 				norm += dist*dist;
 			}
 			norm = sqrt(norm);
@@ -308,8 +353,8 @@ int main()
 		exit(1);
 	}
 
-      Tree tree(position, totalParticles, boundaries);
-      /*
+      //Tree tree(position, totalParticles, boundaries);
+      
 	//Start of simulation - setting initial time to zero
 	double currentTime = 0;
 
@@ -339,40 +384,39 @@ int main()
 		}
 	}
 
-	printf("%g\n", (double)(clock() - tstart) / CLOCKS_PER_SEC);
-      */
+	printf("%g\n", (double)(clock() - tstart) / CLOCKS_PER_SEC);      
       
 	cleanup(positionFile, energyFile, position, velocity, acceleration, oldPosition);
 	return 0;
 }
 //End of main function
 
-void calcAcceleration(double (*acceleration)[3], double (*position)[3], double totalParticles, 
+void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
 	double particlesType1, double& potentialEnergy, double* boundaries)
 {
 	double xvector, yvector, zvector;
 	double sigma, sigmaPow6, sigmaPow12;
 	double pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6;
-	double forceX, forceY, forceZ, forceCoeff;
+	double vectors[DIM], forceCoeff;
 	potentialEnergy = 0;
+      int j, k;
 	
 	//Zero out acceleration, can't do this inside the main loop because we also access the jth entry
 	for(int i = 0; i < totalParticles; i++)
-	{
-		acceleration[i][0] = 0.0;
-		acceleration[i][1] = 0.0;
-		acceleration[i][2] = 0.0;
-	}
-	
-      int j;
+            for(j = 0; j < DIM; j++)
+                  acceleration[i][j] = 0.0;
+
 	for (int i = 0; i < totalParticles; i++)
 	{
 		for (j = 0; j < i; j++)
 		{
-			xvector = determineVectorFlat(position[i][0], position[j][0]);
-			yvector = determineVectorFlat(position[i][1], position[j][1]);
-			zvector = determineVectorFlat(position[i][2], position[j][2]);
-			pythagorean = ((yvector * yvector) + (xvector * xvector) + (zvector * zvector));
+                  pythagorean = 0;
+                  for(k = 0; k < DIM; k++)
+                  {
+                        vectors[k] = determineVectorFlat(position[i][k], position[j][k]);
+                        //vectors[k] = determineVectorPeriodic(position[i][k], position[j][k], boundaries[k]);
+                        pythagorean += vectors[k]*vectors[k];
+                  }
 
 			if (pythagorean < 16.0)
 			{
@@ -387,31 +431,26 @@ void calcAcceleration(double (*acceleration)[3], double (*position)[3], double t
 				invPyPow6 = invPyPow3*invPyPow3;
 				forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);				
 
-				forceX = forceCoeff * xvector;
-				forceY = forceCoeff * yvector;
-				forceZ = forceCoeff * zvector;
-				acceleration[i][0] += forceX;
-				acceleration[i][1] += forceY;
-				acceleration[i][2] += forceZ;
-				acceleration[j][0] -= forceX;
-				acceleration[j][1] -= forceY;
-				acceleration[j][2] -= forceZ;
+                        for(int k = 0; k < DIM; k++)
+                        {
+                              vectors[k] *= forceCoeff;
+                              acceleration[i][k] += vectors[k];
+                              acceleration[j][k] -= vectors[k];
+                        }
+
 				//Factor of four because only calculating half of interactions, so need to double PE
-				potentialEnergy += 4 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
+                        potentialEnergy += 4 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
 			}
 		}
 	}
 	//Because type two particles are twice as heavy
 	for (int i = particlesType1; i < totalParticles; ++i)
-	{
-		acceleration[i][0] = 0.5*acceleration[i][0];
-		acceleration[i][1] = 0.5*acceleration[i][1];
-		acceleration[i][2] = 0.5*acceleration[i][2];
-	}   
+            for(j = 0; j < DIM; j++)
+                  acceleration[i][j] *= 0.5;
 }
 
 /*
-void calcAcceleration(double (*acceleration)[3], double (*position)[3], double totalParticles, 
+void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
 	double particlesType1, double& potentialEnergy, double* boundaries, Tree &tree)
 {
       //Zero out current acceleration
@@ -425,10 +464,10 @@ void calcAcceleration(double (*acceleration)[3], double (*position)[3], double t
 }
 */
 
-void performEulerOperation(int totalParticles, double (*position)[3],
+void performEulerOperation(int totalParticles, double (*position)[DIM],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
-	double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
-	double (*velocity)[3], double timestep)
+	double* boundaries, double (*oldPosition)[DIM], double (*acceleration)[DIM],
+	double (*velocity)[DIM], double timestep)
 {
 	calcAcceleration(acceleration, position, totalParticles, particlesType1, potentialEnergy, boundaries);
 	double dotProd;
@@ -438,13 +477,14 @@ void performEulerOperation(int totalParticles, double (*position)[3],
 	for (int i = 0; i < totalParticles; i++)
 	{
 		dotProd = 0.0;
-		for (j = 0; j < 3; ++j)
+		for (j = 0; j < DIM; ++j)
 		{
 			oldPosition[i][j] = position[i][j];
 			position[i][j] += (velocity[i][j] * timestep);
 			velocity[i][j] += (acceleration[i][j] * timestep);
 
                   applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
+                  //applyPeriodicBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
 			dotProd += velocity[i][j] * velocity[i][j];
 		}
 
@@ -452,10 +492,10 @@ void performEulerOperation(int totalParticles, double (*position)[3],
 	}
 }
 
-void performVerletOperation(int totalParticles, double (*position)[3],
+void performVerletOperation(int totalParticles, double (*position)[DIM],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
-	double* boundaries, double (*oldPosition)[3], double (*acceleration)[3],
-	double (*velocity)[3], double timestep, double halfInvTimestep)
+	double* boundaries, double (*oldPosition)[DIM], double (*acceleration)[DIM],
+	double (*velocity)[DIM], double timestep, double halfInvTimestep)
 {
 	calcAcceleration(acceleration, position, totalParticles, particlesType1, potentialEnergy, boundaries);
 
@@ -471,7 +511,7 @@ void performVerletOperation(int totalParticles, double (*position)[3],
 	{
 		// Vector Verlet Method, unroll the loops?
 		dotProd = 0;
-        	for(j = 0; j < 3; ++j) //Loop over all directions
+        	for(j = 0; j < DIM; ++j) //Loop over all directions
 		{
 			currentDisplacement = position[i][j] - oldPosition[i][j];
 			futureDisplacement = currentDisplacement + (dtsq * acceleration[i][j]);
@@ -480,7 +520,8 @@ void performVerletOperation(int totalParticles, double (*position)[3],
 			velocity[i][j] = (position[i][j] - oldPosition[i][j]) * (halfInvTimestep);
 			oldPosition[i][j] = currentPosition;
 
-        	applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
+                  applySolidBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
+                  //applyPeriodicBoundary(position[i][j], oldPosition[i][j], boundaries[j]);
 			dotProd += velocity[i][j] * velocity[i][j];
 		}
 
@@ -530,12 +571,19 @@ void applySolidBoundary(double &position, double &oldPosition, const double boun
 
 //Can likely offload this to a separate thread - Otherwise would be most efficient to do in Verlet/Euler step 
 //Since the values would be in the cache.
-void outputPosition(std::ofstream &positionFile, const double currentTime, double (*position)[3], const int totalParticles)
+void outputPosition(std::ofstream &positionFile, const double currentTime, double (*position)[DIM], const int totalParticles)
 {	
-	std::string str = " 0 0 0 0 0 0 0 0 0\n";
+      std::string str;
+      //Fill out remaining zeros
+      for(int i = 0; i < 3 - DIM; ++i)
+            str.append("0 ");
+      str.append("0 0 0 0 0 0 0 0 0\n");
 	positionFile << "* " << currentTime << "\n";
 	for (int i = 0; i < totalParticles; ++i)
-	{
-		positionFile << position[i][0] << " " << position[i][1] << " " << position[i][2] << str;
-	}
+      {
+            for(int j = 0; j < DIM; ++j)
+                  positionFile << position[i][j] << " ";
+            positionFile << str;
+      }
+	//positionFile << position[i][0] << " " << position[i][1] << " " << position[i][2] << str;
 }
