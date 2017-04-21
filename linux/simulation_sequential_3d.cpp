@@ -13,44 +13,17 @@
 #define DIM 3
 
 //===================================BEGIN FUNCTION HEADERS===================================
-//Calculates force on each particle based on the present position of all particles
-//Cutoff distance of 4.0 units. 
-//Then calculates the acceleration of each particle based on the force
-//currently applied to it.
-void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
-	double particlesType1, double& potentialEnergy, double* boundaries);
-
-//Function that performs the Euler algorithm on all particles in the set
-void performEulerOperation(int totalParticles, double (*position)[DIM],
-	int particlesType1, double& potentialEnergy, double& kineticEnergy,
-	double* boundaries, double (*oldPosition)[DIM], double (*acceleration)[DIM],
-	double (*velocity)[DIM], double timestep);
-
-//Function that performs the Verlet algorithm on all particles in the set
-void performVerletOperation(int totalParticles, double (*position)[DIM],
-	int particlesType1, double& potentialEnergy, double& kineticEnergy,
-	double* boundaries, double (*oldPosition)[DIM], double (*acceleration)[DIM],
-	double (*velocity)[DIM], double timestep, double halfInvTimestep, double dtsq);
-
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
-double determineVectorPeriodic(const double p1Pos, const double p2Pos, const double size);
+inline double determineVectorPeriodic(const double p1Pos, const double p2Pos, const double size)
+{
+    double ds = p1Pos - p2Pos;
+    return (fabs(ds) > 0.5 * size) ? (ds - copysign(size, ds)) : ds;
+}
 
-//Vector from particle 1 to particle 2 in one direction
-double determineVectorFlat(const double p1Pos, const double p2Pos);
-
-//Translates particles that have exited the simulation area back into the 
-//Simulation region, works in one direction so do for every direction
-void applyPeriodicBoundary(double &position, double &oldPosition, double *boundary);
-
-//Bounce particle off wall
-void applySolidBoundary(double &position, double &oldPosition, double *boundary);
-
-//Outputs to position file
-void outputPosition(std::ofstream &positionFile, const double currentTime, double (*position)[DIM], const int totalParticles);
-
-//Deletes arrays and closes files
-void cleanup(std::ofstream &positionFile, std::ofstream &energyFile, double (*position)[DIM], 
-	double (*oldPosition)[DIM], double (*velocity)[DIM], double (*acceleration)[DIM]);
+inline double determineVectorFlat(const double p1Pos, const double p2Pos)
+{
+	return p1Pos - p2Pos;
+}
 
 //===================================END FUNCTION HEADERS=====================================
 
@@ -66,11 +39,16 @@ class Tree{
 	std::vector<Node> nodesArray;
 	
 	public:
+            Tree()
+            {
+                  //Don't do anything.
+            }
+      
 		Tree(double (*position)[DIM], int numParticles, double boundaries[6])
 		{
 			std::vector<int> indices(numParticles);
-			for(int i = 0; i < numParticles; i++)
-				indices[i] = i;		
+			for(int i = 0; i < numParticles; i++)				
+                        indices[i] = i;		
 			buildTree(0, position, indices, boundaries);
 		};
 
@@ -87,16 +65,15 @@ class Tree{
 	{	
             //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
             //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
+            if(nodeIndex >= nodesArray.size())
+                 nodesArray.resize(nodeIndex + 1);
+
 		if(partIndices.size() == 0)
 		{
-                  if(nodeIndex >= nodesArray.size())
-                       nodesArray.resize(nodeIndex + 1);
 			nodesArray[nodeIndex].particleIndex = -1;
 		}
 		else if(partIndices.size() == 1)
 		{
-                  if(nodeIndex >= nodesArray.size())
-                       nodesArray.resize(nodeIndex + 1);
 			nodesArray[nodeIndex].particleIndex = partIndices[0];
 			//Assume equivalent mass, otherwise will need to modify
 			nodesArray[nodeIndex].mass = 1.0;
@@ -106,9 +83,6 @@ class Tree{
 		else
 		{
 			//Assuming mass of one, sum mass
-                  if(nodeIndex >= nodesArray.size())
-                       nodesArray.resize(nodeIndex + 1);
-
                   nodesArray[nodeIndex].particleIndex = -2;
 			nodesArray[nodeIndex].mass = partIndices.size();
 			//Assuming mass of one, average location
@@ -245,11 +219,46 @@ class Tree{
 };
 
 //============================END TREE STUFF============================================
-//============================DECLARE TREE VERSION======================================
+
+//============================MORE FUNCTION DECLARATIONS======================================
+
+//Calculates force on each particle based on the present position of all particles
+//Cutoff distance of 4.0 units. 
+//Then calculates the acceleration of each particle based on the force
+//currently applied to it.
+void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
+	double particlesType1, double& potentialEnergy, double* boundaries);
 
 //Barnes-Hut version
 void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
-	double particlesType1, double& potentialEnergy, double boundaries[6], Tree &tree);
+	double particlesType1, double& potentialEnergy, double* boundaries, Tree *tree, std::vector<int> &indices);
+
+//Function that performs the Euler algorithm on all particles in the set
+void performEulerOperation(int totalParticles, double (*position)[DIM],
+	int particlesType1, double& potentialEnergy, double& kineticEnergy,
+	double* boundaries, double (*oldPosition)[DIM], double (*acceleration)[DIM],
+	double (*velocity)[DIM], double timestep, Tree *tree, std::vector<int> &indices);
+
+//Function that performs the Verlet algorithm on all particles in the set
+void performVerletOperation(int totalParticles, double (*position)[DIM],
+	int particlesType1, double& potentialEnergy, double& kineticEnergy,
+	double* boundaries, double (*oldPosition)[DIM], double (*acceleration)[DIM],
+	double (*velocity)[DIM], double timestep, double halfInvTimestep, double dtsq,
+      Tree *tree, std::vector<int> &indices);
+
+//Translates particles that have exited the simulation area back into the 
+//Simulation region, works in one direction so do for every direction
+void applyPeriodicBoundary(double &position, double &oldPosition, double *boundary);
+
+//Bounce particle off wall
+void applySolidBoundary(double &position, double &oldPosition, double *boundary);
+
+//Outputs to position file
+void outputPosition(std::ofstream &positionFile, const double currentTime, double (*position)[DIM], const int totalParticles);
+
+//Deletes arrays and closes files
+void cleanup(std::ofstream &positionFile, std::ofstream &energyFile, double (*position)[DIM], 
+	double (*oldPosition)[DIM], double (*velocity)[DIM], double (*acceleration)[DIM]);
 
 //=======================================================================================
 
@@ -282,7 +291,6 @@ int main()
 
 	double potentialEnergy, kineticEnergy, totalEnergy;
 
-	//THIS MUST BE MODIFIED IF YOU USE MORE PARTICLES
 	double boundaries[6] = {0.0, 50.0, 0.0, 50.0, 0.0, 50.0}; //{x_min, x_max, y_min, y_max, z_min, z_max}
 
 	//Particle information arrays
@@ -342,6 +350,11 @@ int main()
 		exit(1);
 	}
       
+      Tree tree;
+      std::vector<int> indices(totalParticles);
+      for(int i = 0; i < totalParticles; i++)
+            indices[i] = i;      
+
 	//Start of simulation - setting initial time to zero
 	double currentTime = 0;
 
@@ -349,7 +362,7 @@ int main()
 
 	//Perform initial Euler operation to set things in motion
 	performEulerOperation(totalParticles, position, numParticlesType1, potentialEnergy,
-	kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep);
+	kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep, &tree, indices);
     
 	totalEnergy = kineticEnergy + potentialEnergy;
 	outputPosition(positionFile, currentTime, position, totalParticles);
@@ -360,7 +373,8 @@ int main()
 	for (currentTime = timestep; currentTime < maxTime; currentTime += timestep)
 	{
 		performVerletOperation(totalParticles, position, numParticlesType1, potentialEnergy,
-		kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep, halfInvTimestep, dtsq);
+		kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep, halfInvTimestep,
+            dtsq, &tree, indices);
 
 		count = (count + 1) % 10; //Can set print interval arbitrarily
 		if(count == 0)
@@ -437,28 +451,27 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
             for(j = 0; j < DIM; j++)
                   acceleration[i][j] *= 0.5;
 }
-/*
+
 void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
-	double particlesType1, double& potentialEnergy, double boundaries[6])
+	double particlesType1, double& potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices)
 {
       //Zero out current acceleration
       potentialEnergy = 0;
-      //Tree tree()
+      tree->buildTree(0, position, indices, boundaries);
 	for(int i = 0; i < totalParticles; i++)
 	{
             for(int j = 0; j < DIM; j++)
                   acceleration[i][j] = 0.0;		
-            tree.calcAcc(0, i, position, acceleration[i], potentialEnergy);
+            tree->calcAcc(0, i, position, acceleration[i], potentialEnergy);
 	}
 }
-*/
 
 void performEulerOperation(int totalParticles, double (*position)[DIM],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
 	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
-	double (*velocity)[DIM], double timestep)
+	double (*velocity)[DIM], double timestep, Tree *tree, std::vector<int> &indices)
 {
-	calcAcceleration(acceleration, position, totalParticles, particlesType1, potentialEnergy, boundaries);
+	calcAcceleration(acceleration, position, totalParticles, particlesType1, potentialEnergy, boundaries, tree, indices);
 	double dotProd;
 
 	int j;
@@ -484,9 +497,10 @@ void performEulerOperation(int totalParticles, double (*position)[DIM],
 void performVerletOperation(int totalParticles, double (*position)[DIM],
 	int particlesType1, double& potentialEnergy, double& kineticEnergy,
 	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
-	double (*velocity)[DIM], double timestep, double halfInvTimestep, double dtsq)
+	double (*velocity)[DIM], double timestep, double halfInvTimestep, double dtsq,
+      Tree *tree, std::vector<int> &indices)
 {
-	calcAcceleration(acceleration, position, totalParticles, particlesType1, potentialEnergy, boundaries);
+	calcAcceleration(acceleration, position, totalParticles, particlesType1, potentialEnergy, boundaries, tree, indices);
 
 	double currentPosition;
 	double currentDisplacement;
@@ -515,17 +529,6 @@ void performVerletOperation(int totalParticles, double (*position)[DIM],
 
 		kineticEnergy += (i < particlesType1) ? 0.5 * dotProd : dotProd;
 	}
-}
-
-double determineVectorPeriodic(const double p1Pos, const double p2Pos, const double size)
-{
-    double ds = p1Pos - p2Pos;
-    return (fabs(ds) > 0.5 * size) ? (ds - copysign(size, ds)) : ds;
-}
-
-double determineVectorFlat(const double p1Pos, const double p2Pos)
-{
-	return p1Pos - p2Pos;
 }
 
 //CHANGE THESE FUNCTIONS IF WANT TO SUPPORT NON-ZERO LOWER BOUND
