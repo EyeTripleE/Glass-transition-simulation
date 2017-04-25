@@ -324,20 +324,14 @@ int main()
       //END SETUP
 
       //START SIMULATION
-      outputPosition(positionFile, currentTime, position, totalParticles);
 
 	//Perform initial Euler operation to set things in motion
 	performEulerOperation(totalParticles, position, numParticlesType1, potentialEnergy,
 	kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep, &tree, indices);
-    
-      //output
-	totalEnergy = kineticEnergy + potentialEnergy;
-	outputPosition(positionFile, currentTime, position, totalParticles);
-	energyFile << currentTime << " " << totalEnergy	<< " " << kineticEnergy << " " << potentialEnergy << "\n";
 
 	//Main loop - performing Verlet operations for the remainder of the simulation
 	unsigned count = 0;
-	for (currentTime = timestep; currentTime < maxTime; currentTime += timestep)
+	for (currentTime = 2*timestep; currentTime < maxTime; currentTime += timestep)
 	{
 		performVerletOperation(totalParticles, position, numParticlesType1, potentialEnergy,
 		kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep, halfInvTimestep,
