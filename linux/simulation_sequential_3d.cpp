@@ -256,15 +256,20 @@ void applySolidBoundary(double &position, double &oldPosition, double *boundary)
 //Outputs to position file
 void outputPosition(std::ofstream &positionFile, const double currentTime, double (*position)[DIM], const int totalParticles);
 
+//Initializes 
+int initializeParticles(double (*position)[DIM], double (*velocity)[DIM], 
+                        int totalParticles, double boundaries[6]);
+
 //Deletes arrays and closes files
-void cleanup(std::ofstream &positionFile, std::ofstream &energyFile, double (*position)[DIM], 
-	double (*oldPosition)[DIM], double (*velocity)[DIM], double (*acceleration)[DIM]);
+void cleanup(double (*position)[DIM], double (*oldPosition)[DIM],
+             double (*velocity)[DIM], double (*acceleration)[DIM]);
 
 //=======================================================================================
 
 //The main function to execute the simulation
 int main()
 {
+      //START SETUP
 	clock_t tstart = clock();
 	/*CONSTANTS FOR REFERENCE THESE ARE HARDCODED*/
 	//constants 0.5(sigma1 + sigma2)
@@ -274,23 +279,24 @@ int main()
 	//double epsilon = 1;// in units of epsilon
 	//double massParticle1 = 1; //in units of massParticle1
 	//double massParticle2 = 2; //in units of massParticle1
-	//Create data files
-	
-	std::ofstream positionFile, energyFile;
-	positionFile.open("position.txt");
-	energyFile.open("energy.txt");
 
+
+      //Set time related variables
 	double timestep = 0.005; //Can be arbitrarily small
 	double maxTime = 10; //Can be arbitrarily long or short
 	double halfInvTimestep = 0.5/timestep; //needed for Verlet
 	double dtsq = timestep*timestep;
+	double currentTime = 0;
 
+      //Set variables for number of particles
 	int numParticlesType1 = 1024;
 	int numParticlesType2 = 0;
 	int totalParticles = numParticlesType1 + numParticlesType2;
 
+      //Set energy variables
 	double potentialEnergy, kineticEnergy, totalEnergy;
 
+      //Set boundary variables
 	double boundaries[6] = {0.0, 50.0, 0.0, 50.0, 0.0, 50.0}; //{x_min, x_max, y_min, y_max, z_min, z_max}
 
 	//Particle information arrays
@@ -299,65 +305,25 @@ int main()
 	double (*oldPosition)[DIM] = new double[totalParticles][DIM];
 	double (*acceleration)[DIM] = new double[totalParticles][DIM];
 
-	std::default_random_engine generator((unsigned)time(NULL));
-	std::normal_distribution<double> normalDistribution(0.0, 0.5);
-      std::uniform_real_distribution<double> uniformDistribution[DIM];
-      for(int i = 0; i < DIM; i++)
-            uniformDistribution[i] = std::uniform_real_distribution<double>(boundaries[2*i], boundaries[2*i + 1]);
-	
-	for(int i = 0; i < totalParticles; i++)
-            for(int j = 0; j < DIM; j++)
-                  velocity[i][j] = normalDistribution(generator);
+      if(initializeParticles(position, velocity, totalParticles, boundaries) != 0)
+      {
+		cleanup(position, velocity, acceleration, oldPosition);
+            exit(1);
+      }
 
-	double minSpacing = 1.0;//Be careful with this parameter, energy is really high when this is small
-	double maxIter = 50;
-	double norm;
-	int oldi = 0;
-	unsigned count = 0;
-	double dist;
-
-	//Loop for a set number of iterations or until no particles have to be moved
-	for(int i = 0; i < totalParticles && count < maxIter; i++)
-	{		
-		count = (i != oldi) ? 0 : count + 1; //If this is a particle we've already moved, add one to count
-		oldi = i;
-            for(int j = 0; j < DIM; j++)
-                  position[i][j] = uniformDistribution[j](generator);
-	
-		for(int j = 0; j < i; j++)
-		{
-			norm = 0;
-			for(int k = 0; k < DIM; k++)
-			{	
-				//dist = determineVectorPeriodic(position[i][k], position[j][k], boundaries[k]);
-                        dist = determineVectorFlat(position[i][k], position[j][k]);
-				norm += dist*dist;
-			}
-			norm = sqrt(norm);
-			
-			if(norm < minSpacing)
-			{
-				//Start over checking ith particle against prior particles
-				i--;
-				break; 
-			}
-		}
-	}
-	if(count >= maxIter)
-	{
-		printf("Maximum iteration reached when attempting to place particles. Try using a larger domain.\n");
-		cleanup(positionFile, energyFile, position, velocity, acceleration, oldPosition);
-		exit(1);
-	}
+	//Create data files	
+	std::ofstream positionFile, energyFile;
+	positionFile.open("position.txt");
+	energyFile.open("energy.txt");
       
       Tree tree;
       std::vector<int> indices(totalParticles);
       for(int i = 0; i < totalParticles; i++)
-            indices[i] = i;      
+            indices[i] = i;  
 
-	//Start of simulation - setting initial time to zero
-	double currentTime = 0;
+      //END SETUP
 
+      //START SIMULATION
       outputPosition(positionFile, currentTime, position, totalParticles);
 
 	//Perform initial Euler operation to set things in motion
@@ -369,7 +335,7 @@ int main()
 	energyFile << currentTime << " " << totalEnergy	<< " " << kineticEnergy << " " << potentialEnergy << "\n";
 
 	//Main loop - performing Verlet operations for the remainder of the simulation
-	count = 0;
+	unsigned count = 0;
 	for (currentTime = timestep; currentTime < maxTime; currentTime += timestep)
 	{
 		performVerletOperation(totalParticles, position, numParticlesType1, potentialEnergy,
@@ -381,13 +347,16 @@ int main()
 		{
 			totalEnergy = kineticEnergy + potentialEnergy;
 			outputPosition(positionFile, currentTime, position, totalParticles);
-			energyFile << currentTime << " " << totalEnergy << " " << kineticEnergy << " " << potentialEnergy << "\n";
+			energyFile << currentTime << " " << totalEnergy << " " << kineticEnergy
+                  << " " << potentialEnergy << "\n";
 		}
 	}
 
 	printf("%g\n", (double)(clock() - tstart) / CLOCKS_PER_SEC);      
       
-	cleanup(positionFile, energyFile, position, velocity, acceleration, oldPosition);
+	cleanup(position, velocity, acceleration, oldPosition);
+	positionFile.close();
+	energyFile.close();
 	return 0;
 }
 //End of main function
@@ -396,7 +365,6 @@ int main()
 void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
 	double particlesType1, double& potentialEnergy, double boundaries[6])
 {
-	double xvector, yvector, zvector;
 	double sigma, sigmaPow6, sigmaPow12;
 	double pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6;
 	double vectors[DIM], forceCoeff;
@@ -511,7 +479,7 @@ void performVerletOperation(int totalParticles, double (*position)[DIM],
 
 	for (int i = 0; i < totalParticles; i++)
 	{
-		// Vector Verlet Method, unroll the loops?
+		// Vector Verlet Method, unroll the loops? Compiler takes care of?
 		dotProd = 0;
         	for(j = 0; j < DIM; ++j) //Loop over all directions
 		{
@@ -582,10 +550,69 @@ void outputPosition(std::ofstream &positionFile, const double currentTime, doubl
       }
 }
 
-void cleanup(std::ofstream &positionFile, std::ofstream &energyFile, double (*position)[DIM], 
-	double (*oldPosition)[DIM], double (*velocity)[DIM], double (*acceleration)[DIM])
+int initializeParticles(double (*position)[DIM], double (*velocity)[DIM], int totalParticles, double boundaries[6])
 {
-	delete[] position, velocity, acceleration, oldPosition;
-	positionFile.close();
-	energyFile.close();
+	std::default_random_engine generator((unsigned)time(NULL));
+	std::normal_distribution<double> normalDistribution(0.0, 0.5);
+      std::uniform_real_distribution<double> uniformDistribution[DIM];
+      for(int i = 0; i < DIM; i++)
+            uniformDistribution[i] = std::uniform_real_distribution<double>(boundaries[2*i], boundaries[2*i + 1]);
+	
+	for(int i = 0; i < totalParticles; i++)
+            for(int j = 0; j < DIM; j++)
+                  velocity[i][j] = normalDistribution(generator);
+
+	double minSpacing = 1.0;//Be careful with this parameter, energy is really high when this is small
+	double maxIter = 50;
+	double norm;
+	int oldi = 0;
+	unsigned count = 0;
+	double dist;
+
+	//Loop for a set number of iterations or until no particles have to be moved
+	for(int i = 0; i < totalParticles && count < maxIter; i++)
+	{		
+		count = (i != oldi) ? 0 : count + 1; //If this is a particle we've already moved, add one to count
+		oldi = i;
+            for(int j = 0; j < DIM; j++)
+                  position[i][j] = uniformDistribution[j](generator);
+	
+		for(int j = 0; j < i; j++)
+		{
+			norm = 0;
+			for(int k = 0; k < DIM; k++)
+			{	
+				//dist = determineVectorPeriodic(position[i][k], position[j][k], boundaries[k]);
+                        dist = determineVectorFlat(position[i][k], position[j][k]);
+				norm += dist*dist;
+			}
+			norm = sqrt(norm);
+			
+			if(norm < minSpacing)
+			{
+				//Start over checking ith particle against prior particles
+				i--;
+				break; 
+			}
+		}
+	}
+
+	if(count >= maxIter)
+	{
+		printf("Maximum iteration reached when attempting to place particles. Try using a larger domain.\n");
+		return 1;
+	}
+      else
+      {
+            return 0;
+      }
+}
+
+void cleanup(double (*position)[DIM], double (*oldPosition)[DIM], 
+             double (*velocity)[DIM], double (*acceleration)[DIM])
+{
+	delete [] position;
+      delete [] velocity;
+      delete [] acceleration;
+      delete [] oldPosition;
 }
