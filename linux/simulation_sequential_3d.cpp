@@ -330,6 +330,7 @@ int main()
 	performEulerOperation(totalParticles, position, numParticlesType1, potentialEnergy,
 	kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep, &tree, indices);
     
+      //output
 	totalEnergy = kineticEnergy + potentialEnergy;
 	outputPosition(positionFile, currentTime, position, totalParticles);
 	energyFile << currentTime << " " << totalEnergy	<< " " << kineticEnergy << " " << potentialEnergy << "\n";
@@ -342,6 +343,7 @@ int main()
 		kineticEnergy, boundaries, oldPosition, acceleration, velocity, timestep, halfInvTimestep,
             dtsq, &tree, indices);
 
+            //output
 		count = (count + 1) % 10; //Can set print interval arbitrarily
 		if(count == 0)
 		{
