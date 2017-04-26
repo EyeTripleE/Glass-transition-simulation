@@ -41,19 +41,19 @@ struct Node{
 
 class Tree{
 
-      private:
+      public:
             MPI_Datatype nodeType;
             MPI_Op mergeOp;
 
-            void mergeNodes(Node *in, Node *inout, int *len, MPI_Datatype *dptr)
+            static void mergeNodes(void *in, void *inout, int *len, MPI_Datatype *dptr)
             {
-                  if(in->particleIndex != UNDEFINED)
+                  if(((Node*)in)->particleIndex != UNDEFINED)
                   {
                         //Deep copy the struct
-                        inout->particleIndex = in->particleIndex;
-                        inout->mass = in->mass;
+                        ((Node*)inout)->particleIndex = ((Node*)in)->particleIndex;
+                        ((Node*)inout)->mass = ((Node*)in)->mass;
                         for(int i = 0; i < DIM; i++)
-                              inout->com[i] = in->com[i];
+                              ((Node*)inout)->com[i] = ((Node*)in)->com[i];
                   }
             }
 
@@ -63,10 +63,10 @@ class Tree{
                   MPI_Aint displacements[3] = {0, 1, 2};
                   MPI_Datatype types[3] = {MPI_INT, MPI_DOUBLE, MPI_DOUBLE};
                   MPI_Type_create_struct(3, blockLengths, displacements, types, &nodeType);
+                  MPI_Type_commit(&nodeType); 
                   MPI_Op_create(mergeNodes, true, &mergeOp);
             }        
 	
-	public:
 	      std::vector<Node> nodesArray;
 
 
@@ -96,6 +96,7 @@ class Tree{
 	//an array based tree. Merge the trees. 
 	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double boundaries[6], int rank)
 	{	
+            if(rank == 0) printf("here %d\n", nodeIndex);
             //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
             //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
             unsigned oldSize = nodesArray.size();            
@@ -204,61 +205,33 @@ class Tree{
 				}
 			}			
 									
-			//Build tree based on subdivisions
-                  if(nodeIndex == 0) //Spin off new threads at first level
+			//Build tree based on subdivisions //Can generize to handle any power of 8 based on size and nodeIndex
+                  if(nodeIndex == 0) //&& size >= 8 //Spin off new threads at first level
                   {
-                        switch(rank)
-                        {
-                              case 0:
-				            buildTree(1, position, indicesArray[0], boundaryArray[0], rank);
-                                    break;
-                              case 1:
-				            buildTree(2, position, indicesArray[1], boundaryArray[1], rank);
-                                    break;
-                              case 2:
-				            buildTree(3, position, indicesArray[2], boundaryArray[2], rank);
-                                    break;
-                              case 3:
-				            buildTree(4, position, indicesArray[3], boundaryArray[3], rank);
-                                    break;
-                              case 4:
-				            buildTree(5, position, indicesArray[4], boundaryArray[4], rank);
-                                    break;
-                              case 5:
-				            buildTree(6, position, indicesArray[5], boundaryArray[5], rank);
-                                    break;
-                              case 6:
-				            buildTree(7, position, indicesArray[6], boundaryArray[6], rank);
-                                    break;
-                              case 7:
-				            buildTree(8, position, indicesArray[7], boundaryArray[7], rank);
-                                    break;
-                              default: //Don't do anything if not first 8 processes
-                                    break;
-                                    
+                        int index = rank % 8;
+                        buildTree(index + 1, position, indicesArray[index], boundaryArray[index], rank);                                   
 
-                              //Merge branches
-                              //Could initiate on root (in calcAcceleration) and have split of a sub-group of eight processors.
-                              unsigned maxSize;
-                              unsigned oldSize = nodesArray.size();
-                              MPI_Allreduce(&maxSize, &oldSize, 1, MPI_UNSIGNED, MPI_MAX, MPI_COMM_WORLD);
-                              if(maxSize > nodesArray.size())                              
-                                    nodesArray.resize(maxSize);
-                              for(unsigned i = oldSize; i < maxSize; i++)
-                                    nodesArray[i].particleIndex = UNDEFINED;
-                              
-                              //TODO - DETERMINE HOW TO MERGE BRANCHES
-                              //Perhaps copy struct into three separate arrays, run three all reduces, and then copy back into a struct.
-                              //Although if that is necessary then it would be better to use three separate vectors instead of a 
-                              //vector of structs. Alternatively, define an MPI struct type and a sum operator for that type.
-                              //http://www.mcs.anl.gov/research/projects/mpi/mpi-standard/mpi-report-1.1/node80.htm
-                              //https://www.msi.umn.edu/workshops/mpi/hands-on/derived-datatypes/struct/assign
+                        //Merge branches
+                        //Could initiate on root (in calcAcceleration) and have split of a sub-group of eight processors.
+                        unsigned maxSize;
+                        unsigned oldSize = nodesArray.size();
+                        MPI_Allreduce(&maxSize, &oldSize, 1, MPI_UNSIGNED, MPI_MAX, MPI_COMM_WORLD);
+                        if(maxSize > nodesArray.size())                              
+                              nodesArray.resize(maxSize);
+                        for(unsigned i = oldSize; i < maxSize; i++)
+                              nodesArray[i].particleIndex = UNDEFINED;
+                        
+                        //TODO - DETERMINE HOW TO MERGE BRANCHES
+                        //Perhaps copy struct into three separate arrays, run three all reduces, and then copy back into a struct.
+                        //Although if that is necessary then it would be better to use three separate vectors instead of a 
+                        //vector of structs. Alternatively, define an MPI struct type and a sum operator for that type.
+                        //http://www.mcs.anl.gov/research/projects/mpi/mpi-standard/mpi-report-1.1/node80.htm
+                        //https://www.msi.umn.edu/workshops/mpi/hands-on/derived-datatypes/struct/assign
 
-                              MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, nodeType, mergeOp, MPI_COMM_WORLD); 
-                        }                    
+                        MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, nodeType, mergeOp, MPI_COMM_WORLD);                 
                   }
                   //Potential case for 64 processes.
-                  //else if(nodeIndex > 0 && nodeIndex <= 9)
+                  //else if(nodeIndex > 0 && nodeIndex <= 9 && size >= 64)
                   //{}
                   else //Build 
                   {
@@ -443,6 +416,7 @@ int main(int argc, char* argv[])
       }
       
       Tree tree;
+      tree.init_mpi_ops();
       std::vector<int> indices(totalParticles);
       for(int i = 0; i < totalParticles; i++)
             indices[i] = i;  
