@@ -212,7 +212,6 @@ class Tree{
                         buildTree(index + 1, position, indicesArray[index], boundaryArray[index], rank);                                   
 
                         //Merge branches
-                        //Could initiate on root (in calcAcceleration) and have split of a sub-group of eight processors.
                         unsigned maxSize;
                         unsigned oldSize = nodesArray.size();
                         MPI_Allreduce(&maxSize, &oldSize, 1, MPI_UNSIGNED, MPI_MAX, MPI_COMM_WORLD);
@@ -558,7 +557,7 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
       potentialEnergy[0] = 0;
       //Zero out the old tree
       for(unsigned i = 0; i < tree->nodesArray.size(); i++)
-            tree->nodesArray[i].particleIndex = 0;
+            tree->nodesArray[i].particleIndex = UNDEFINED;
                         
       tree->buildTree(0, position, indices, boundaries, rank);
 	for(int i = myStart; i < myEnd; i++)
