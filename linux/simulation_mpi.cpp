@@ -11,7 +11,11 @@
 #include <random>
 #include <vector>
 #include "mpi.h"
+
 #define DIM 3
+#define EMPTY_LEAF -1
+#define BRANCH -2
+#define UNDEFINED -3
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
@@ -36,17 +40,44 @@ struct Node{
 };
 
 class Tree{
+
+      private:
+            MPI_Datatype nodeType;
+            MPI_Op mergeOp;
+
+            void mergeNodes(Node *in, Node *inout, int *len, MPI_Datatype *dptr)
+            {
+                  if(in->particleIndex != UNDEFINED)
+                  {
+                        //Deep copy the struct
+                        inout->particleIndex = in->particleIndex;
+                        inout->mass = in->mass;
+                        for(int i = 0; i < DIM; i++)
+                              inout->com[i] = in->com[i];
+                  }
+            }
+
+            void init_mpi_ops()
+            {
+                  int blockLengths[3] = {1, 1, DIM};
+                  MPI_Aint displacements[3] = {0, 1, 2};
+                  MPI_Datatype types[3] = {MPI_INT, MPI_DOUBLE, MPI_DOUBLE};
+                  MPI_Type_create_struct(3, blockLengths, displacements, types, &nodeType);
+                  MPI_Op_create(mergeNodes, true, &mergeOp);
+            }        
 	
 	public:
 	      std::vector<Node> nodesArray;
 
+
             Tree()
             {
-                  //Don't do anything.
+                  init_mpi_ops();
             }
       
 		Tree(double (*position)[DIM], int numParticles, double boundaries[6], int rank)
 		{
+                  init_mpi_ops();
 			std::vector<int> indices(numParticles);
 			for(int i = 0; i < numParticles; i++)				
                         indices[i] = i;		
@@ -55,6 +86,7 @@ class Tree{
 
             Tree(std::vector<Node> &vec)
             {
+                  init_mpi_ops();
                   nodesArray = vec;
             }
 
@@ -70,11 +102,11 @@ class Tree{
             if(nodeIndex >= nodesArray.size())
                  nodesArray.resize(nodeIndex + 1);
             for(unsigned i = oldSize; i < nodeIndex + 1; i++)
-                  nodesArray[i].particleIndex = 0;
+                  nodesArray[i].particleIndex = UNDEFINED;
 
 		if(partIndices.size() == 0)
 		{
-			nodesArray[nodeIndex].particleIndex = -1;
+			nodesArray[nodeIndex].particleIndex = EMPTY_LEAF;
 		}
 		else if(partIndices.size() == 1)
 		{
@@ -87,7 +119,7 @@ class Tree{
 		else
 		{
 			//Assuming mass of one, sum mass
-                  nodesArray[nodeIndex].particleIndex = -2;
+                  nodesArray[nodeIndex].particleIndex = BRANCH;
 			nodesArray[nodeIndex].mass = partIndices.size();
 			//Assuming mass of one, average location
 			for(int j = 0; j < DIM; j++)
@@ -213,7 +245,7 @@ class Tree{
                               if(maxSize > nodesArray.size())                              
                                     nodesArray.resize(maxSize);
                               for(unsigned i = oldSize; i < maxSize; i++)
-                                    nodesArray[i].particleIndex = 0;
+                                    nodesArray[i].particleIndex = UNDEFINED;
                               
                               //TODO - DETERMINE HOW TO MERGE BRANCHES
                               //Perhaps copy struct into three separate arrays, run three all reduces, and then copy back into a struct.
@@ -222,7 +254,7 @@ class Tree{
                               //http://www.mcs.anl.gov/research/projects/mpi/mpi-standard/mpi-report-1.1/node80.htm
                               //https://www.msi.umn.edu/workshops/mpi/hands-on/derived-datatypes/struct/assign
 
-                              //MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, <INSERT TYPE>, <INSERT OP>, MPI_COMM_WORLD); 
+                              MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, nodeType, mergeOp, MPI_COMM_WORLD); 
                         }                    
                   }
                   //Potential case for 64 processes.
