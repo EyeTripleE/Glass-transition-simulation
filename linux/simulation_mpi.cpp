@@ -219,7 +219,10 @@ class Tree{
                               //Perhaps copy struct into three separate arrays, run three all reduces, and then copy back into a struct.
                               //Although if that is necessary then it would be better to use three separate vectors instead of a 
                               //vector of structs. Alternatively, define an MPI struct type and a sum operator for that type.
-                              //MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD); 
+                              //http://www.mcs.anl.gov/research/projects/mpi/mpi-standard/mpi-report-1.1/node80.htm
+                              //https://www.msi.umn.edu/workshops/mpi/hands-on/derived-datatypes/struct/assign
+
+                              //MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, <INSERT TYPE>, <INSERT OP>, MPI_COMM_WORLD); 
                         }                    
                   }
                   //Potential case for 64 processes.
@@ -394,7 +397,7 @@ int main(int argc, char* argv[])
       }
 
 	//-----------------------------------------------------------------------//
-	// Distribute Data           						 //
+	// Distribute Data           						             //
 	MPI_Bcast(position, 3*totalParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);	 //
 	MPI_Bcast(velocity, 3*totalParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);	 //
 	//-----------------------------------------------------------------------//
