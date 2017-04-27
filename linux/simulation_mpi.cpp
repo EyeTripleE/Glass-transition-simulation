@@ -36,7 +36,8 @@ inline double determineVectorFlat(const double p1Pos, const double p2Pos)
 
 struct Node{
 	int particleIndex;
-	double mass, com[DIM];
+	double mass;
+      double com[DIM];
 };
 
 class Tree{
@@ -47,20 +48,26 @@ class Tree{
 
             static void mergeNodes(void *in, void *inout, int *len, MPI_Datatype *dptr)
             {
-                  if(((Node*)in)->particleIndex != UNDEFINED)
+                 int j;
+                 for(int i = 0; i < len[0]; i++)
                   {
-                        //Deep copy the struct
-                        ((Node*)inout)->particleIndex = ((Node*)in)->particleIndex;
-                        ((Node*)inout)->mass = ((Node*)in)->mass;
-                        for(int i = 0; i < DIM; i++)
-                              ((Node*)inout)->com[i] = ((Node*)in)->com[i];
+                        if( (((Node* )inout)[i]).particleIndex != UNDEFINED)
+                        {
+                              //Deep copy the struct
+                              (((Node* )inout)[i]).particleIndex = (((Node* )in)[i]).particleIndex;
+                              (((Node* )inout)[i]).mass = (((Node* )in)[i]).mass;
+                              for(j = 0; j < DIM; j++)
+                                    (((Node* )inout)[i]).com[j] = (((Node* )in)[i]).com[j];
+                        }
                   }
             }
 
             void init_mpi_ops()
             {
+                  Node tempNode;
                   int blockLengths[3] = {1, 1, DIM};
-                  MPI_Aint displacements[3] = {0, 1, 2};
+                  MPI_Aint displacements[3] = {(size_t)&tempNode.particleIndex - (size_t)&tempNode,
+                        (size_t)&tempNode.mass - (size_t)&tempNode, (size_t)&tempNode.com - (size_t)&tempNode};
                   MPI_Datatype types[3] = {MPI_INT, MPI_DOUBLE, MPI_DOUBLE};
                   MPI_Type_create_struct(3, blockLengths, displacements, types, &nodeType);
                   MPI_Type_commit(&nodeType); 
@@ -97,7 +104,7 @@ class Tree{
 	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double boundaries[6], int rank)
 	{	
             //if(rank == 0) printf("here %d\n", nodeIndex);
-            printf("here %d\n", nodeIndex);
+            //printf("here %d\n", nodeIndex);
             //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
             //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
             unsigned oldSize = nodesArray.size();            
@@ -215,7 +222,7 @@ class Tree{
                         //Merge branches
                         unsigned maxSize;
                         unsigned oldSize = nodesArray.size();
-                        MPI_Allreduce(&maxSize, &oldSize, 1, MPI_UNSIGNED, MPI_MAX, MPI_COMM_WORLD);
+                        MPI_Allreduce(&oldSize, &maxSize, 1, MPI_UNSIGNED, MPI_MAX, MPI_COMM_WORLD);
                         if(maxSize > nodesArray.size())                              
                               nodesArray.resize(maxSize);
                         for(unsigned i = oldSize; i < maxSize; i++)
@@ -227,8 +234,10 @@ class Tree{
                         //vector of structs. Alternatively, define an MPI struct type and a sum operator for that type.
                         //http://www.mcs.anl.gov/research/projects/mpi/mpi-standard/mpi-report-1.1/node80.htm
                         //https://www.msi.umn.edu/workshops/mpi/hands-on/derived-datatypes/struct/assign
-
-                        MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, nodeType, mergeOp, MPI_COMM_WORLD);                 
+                        
+                        //printf("here %d\n", nodeIndex);
+                        MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, nodeType, mergeOp, MPI_COMM_WORLD);       
+                        //printf("here %d\n", nodeIndex);          
                   }
                   //Potential case for 64 processes.
                   //else if(nodeIndex > 0 && nodeIndex <= 9 && size >= 64)
