@@ -96,7 +96,8 @@ class Tree{
 	//an array based tree. Merge the trees. 
 	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double boundaries[6], int rank)
 	{	
-            if(rank == 0) printf("here %d\n", nodeIndex);
+            //if(rank == 0) printf("here %d\n", nodeIndex);
+            printf("here %d\n", nodeIndex);
             //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
             //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
             unsigned oldSize = nodesArray.size();            
@@ -243,7 +244,7 @@ class Tree{
       void calcAcc(int nodeIndex, int partIndex, double (*position)[DIM], double acceleration[DIM], double *potentialEnergy)
       {            
             //Empty square or itself, do nothing
-            if(nodesArray[nodeIndex].particleIndex != -1 && nodesArray[nodeIndex].particleIndex != partIndex)
+            if(nodesArray[nodeIndex].particleIndex != EMPTY_LEAF && nodesArray[nodeIndex].particleIndex != partIndex)
             {
                   double vectors[DIM];
                   double pythagorean = 0;
