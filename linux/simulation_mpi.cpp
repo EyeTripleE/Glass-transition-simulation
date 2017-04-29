@@ -306,7 +306,7 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
       int myStart, int myEnd,	double particlesType1, double *potentialEnergy, double boundaries[6]);
 
 //Barnes-Hut version
-void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, int myStart, int myEnd,
+void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int totalParticles, int localParticles, int myStart, int myEnd,
       int rank, double particlesType1, double *potentialEnergy,
       double boundaries[6], Tree *tree, std::vector<int> &indices);
 
@@ -368,7 +368,7 @@ int main(int argc, char* argv[])
 
       //Set time related variables
 	double timestep = 0.005; //Can be arbitrarily small
-	double maxTime = 1; //Can be arbitrarily long or short
+	double maxTime = 10; //Can be arbitrarily long or short
 	double halfInvTimestep = 0.5/timestep; //needed for Verlet
 	double dtsq = timestep*timestep;
 	double currentTime = 0;
@@ -452,8 +452,8 @@ int main(int argc, char* argv[])
 		count = (count + 1) % 10; //Can set print interval arbitrarily
 		if(count == 0 && rank == 0)
 		{
-               printf("%g %g %g\n", currentTime, energies[0], energies[1]);
 			totalEnergy = energies[0] + energies[1];
+               printf("%g %g %g %g\n", currentTime, energies[0], energies[1], totalEnergy);
 			outputPosition(positionFile, currentTime, position, totalParticles);
 			energyFile << currentTime << " " << totalEnergy << " " << energies[0]
                   << " " << energies[1] << "\n";
@@ -561,7 +561,7 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
       //            acceleration[i][j] *= 0.5;
 }
 
-void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, int myStart, int myEnd, int rank, 
+void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int totalParticles, int localParticles, int myStart, int myEnd, int rank, 
 	double particlesType1, double *potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices)
 {
       //Zero out current acceleration
@@ -572,6 +572,8 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
                         
      tree->buildTree(0, position, indices, boundaries, rank);
 	//for(int i = myStart; i < myEnd; i++)
+
+     //Have clusters of 8 processors take a chunk
      for(int i = 0; i < totalParticles; i++)
 	{
             for(int j = 0; j < DIM; j++)
@@ -580,7 +582,18 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
 	}
      
      //Tree reduce here
-     MPI_Allreduce(MPI_IN_PLACE, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+     //MPI_Allreduce(MPI_IN_PLACE, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+     
+     if(rank == 0)     
+          MPI_Reduce(MPI_IN_PLACE, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+     else
+          MPI_Reduce(acceleration, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+     
+     if(rank == 0)
+          MPI_Scatter(acceleration, 3*localParticles, MPI_DOUBLE, MPI_IN_PLACE, 3*localParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);     
+     else
+          MPI_Scatter(nullptr, 3*localParticles, MPI_DOUBLE, &acceleration[myStart], 3*localParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);  
+              
 }
 
 //Function that performs the Euler algorithm on all particles in the set
@@ -589,8 +602,8 @@ void performEulerOperation(int totalParticles, int localParticles, int myStart, 
       double (*oldPosition)[DIM], double (*acceleration)[DIM], double (*velocity)[DIM],
       double timestep, Tree *tree, std::vector<int> &indices)
 {
-      //calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
-	calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, rank, particlesType1, &energies[1], boundaries, tree, indices);
+     //calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
+	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart, myEnd, rank, particlesType1, &energies[1], boundaries, tree, indices);
 
 	double dotProd;
 
@@ -615,7 +628,7 @@ void performEulerOperation(int totalParticles, int localParticles, int myStart, 
 
       double temp[2];
 	MPI_Reduce(energies, temp, 2, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-      energies[0] = temp[0]; energies[1] = temp[1];
+     energies[0] = temp[0]; energies[1] = temp[1];
 
 	MPI_Allgather(MPI_IN_PLACE, 3*localParticles, MPI_DOUBLE, position,
 										 3*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
@@ -628,7 +641,7 @@ void performVerletOperation(int totalParticles, int localParticles, int myStart,
       Tree *tree, std::vector<int> &indices)
 {
       //calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
-	calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, rank, particlesType1, &energies[1], boundaries, tree, indices);
+	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart, myEnd, rank, particlesType1, &energies[1], boundaries, tree, indices);
 
 	double currentPosition;
 	double currentDisplacement;
