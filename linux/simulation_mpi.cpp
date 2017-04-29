@@ -79,12 +79,12 @@ class Tree{
 
             Tree()
             {
-                  init_mpi_ops();
+                  //init_mpi_ops();
             }
       
 		Tree(double (*position)[DIM], int numParticles, double boundaries[6], int rank)
 		{
-                  init_mpi_ops();
+                  //init_mpi_ops();
 			std::vector<int> indices(numParticles);
 			for(int i = 0; i < numParticles; i++)				
                         indices[i] = i;		
@@ -93,7 +93,7 @@ class Tree{
 
             Tree(std::vector<Node> &vec)
             {
-                  init_mpi_ops();
+                  //init_mpi_ops();
                   nodesArray = vec;
             }
 
@@ -236,7 +236,7 @@ class Tree{
                         //https://www.msi.umn.edu/workshops/mpi/hands-on/derived-datatypes/struct/assign
                         
                         //printf("here %d\n", nodeIndex);
-                        MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, nodeType, mergeOp, MPI_COMM_WORLD);       
+                        //MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, nodeType, mergeOp, MPI_COMM_WORLD);       
                         //printf("here %d\n", nodeIndex);          
                   }
                   //Potential case for 64 processes.
@@ -368,7 +368,7 @@ int main(int argc, char* argv[])
 
       //Set time related variables
 	double timestep = 0.005; //Can be arbitrarily small
-	double maxTime = 10; //Can be arbitrarily long or short
+	double maxTime = 1; //Can be arbitrarily long or short
 	double halfInvTimestep = 0.5/timestep; //needed for Verlet
 	double dtsq = timestep*timestep;
 	double currentTime = 0;
@@ -425,7 +425,7 @@ int main(int argc, char* argv[])
       }
       
       Tree tree;
-      tree.init_mpi_ops();
+      //tree.init_mpi_ops();
       std::vector<int> indices(totalParticles);
       for(int i = 0; i < totalParticles; i++)
             indices[i] = i;  
@@ -452,6 +452,7 @@ int main(int argc, char* argv[])
 		count = (count + 1) % 10; //Can set print interval arbitrarily
 		if(count == 0 && rank == 0)
 		{
+               printf("%g %g %g\n", currentTime, energies[0], energies[1]);
 			totalEnergy = energies[0] + energies[1];
 			outputPosition(positionFile, currentTime, position, totalParticles);
 			energyFile << currentTime << " " << totalEnergy << " " << energies[0]
@@ -566,16 +567,20 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
       //Zero out current acceleration
       potentialEnergy[0] = 0;
       //Zero out the old tree
-      for(unsigned i = 0; i < tree->nodesArray.size(); i++)
-            tree->nodesArray[i].particleIndex = UNDEFINED;
+      //for(unsigned i = 0; i < tree->nodesArray.size(); i++)
+      //      tree->nodesArray[i].particleIndex = UNDEFINED;
                         
-      tree->buildTree(0, position, indices, boundaries, rank);
-	for(int i = myStart; i < myEnd; i++)
+     tree->buildTree(0, position, indices, boundaries, rank);
+	//for(int i = myStart; i < myEnd; i++)
+     for(int i = 0; i < totalParticles; i++)
 	{
             for(int j = 0; j < DIM; j++)
                   acceleration[i][j] = 0.0;		
-            tree->calcAcc(0, i, position, acceleration[i], potentialEnergy);
+            tree->calcAcc(rank % 8 + 1, i, position, acceleration[i], potentialEnergy);
 	}
+     
+     //Tree reduce here
+     MPI_Allreduce(MPI_IN_PLACE, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 }
 
 //Function that performs the Euler algorithm on all particles in the set
