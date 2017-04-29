@@ -306,19 +306,20 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
       int myStart, int myEnd,	double particlesType1, double *potentialEnergy, double boundaries[6]);
 
 //Barnes-Hut version
-void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int totalParticles, int localParticles, int myStart, int myEnd,
-      int rank, double particlesType1, double *potentialEnergy,
-      double boundaries[6], Tree *tree, std::vector<int> &indices);
+void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int totalParticles, int localParticles,
+      int myStart, int clusterParticles, int numClusters, int clusterID, int rank, double particlesType1,
+      double *potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices);
 
 //Function that performs the Euler algorithm on all particles in the set
-void performEulerOperation(int totalParticles, int localParticles, int myStart, int myEnd, int rank, double (*position)[DIM],
-	int particlesType1, double energies[2],
+void performEulerOperation(int totalParticles, int localParticles, int myStart, int myEnd, int rank, 
+     int clusterParticles, int numClusters, int clusterID, double (*position)[DIM],	int particlesType1, double energies[2],
 	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
 	double (*velocity)[DIM], double timestep, Tree *tree, std::vector<int> &indices);
 
 //Function that performs the Verlet algorithm on all particles in the set
 void performVerletOperation(int totalParticles, int localParticles, int myStart, int myEnd, int rank,
-      double (*position)[DIM], int particlesType1, double energies[2],
+     int clusterParticles, int numClusters, int clusterID, 
+     double (*position)[DIM], int particlesType1, double energies[2],
 	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
 	double (*velocity)[DIM], double timestep, double halfInvTimestep, double dtsq,
       Tree *tree, std::vector<int> &indices);
@@ -342,6 +343,9 @@ void cleanup(double (*position)[DIM], double (*oldPosition)[DIM],
              double (*velocity)[DIM], double (*acceleration)[DIM]);
 
 //=======================================================================================
+
+MPI_Comm COMM_COLUMN;
+MPI_Comm COMM_ROW;
 
 //The main function to execute the simulation
 int main(int argc, char* argv[])
@@ -382,6 +386,14 @@ int main(int argc, char* argv[])
 	int localParticles = totalParticles/size; 
 	int myStart = rank*localParticles;
 	int myEnd = (rank + 1)*localParticles;
+     int numClusters = size/8;
+     int clusterID = rank/8;
+     int clusterParticles = totalParticles / numClusters;     
+     int clusterStart = clusterParticles*clusterID;
+     int clusterEnd = clusterParticles*(clusterID + 1);
+
+     MPI_Comm_split(MPI_COMM_WORLD, clusterID, rank, &COMM_COLUMN);
+     MPI_Comm_split(MPI_COMM_WORLD, rank % 8, rank, &COMM_ROW);
 
       //Set energy variables
 	double energies[2], totalEnergy; //{kineticEnergy, potentialEnergy}
@@ -411,7 +423,7 @@ int main(int argc, char* argv[])
       }
 
 	//-----------------------------------------------------------------------//
-	// Distribute Data           						             //
+	// Distribute Data           						                //
 	MPI_Bcast(position, 3*totalParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);	 //
 	MPI_Bcast(velocity, 3*totalParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);	 //
 	//-----------------------------------------------------------------------//
@@ -435,15 +447,16 @@ int main(int argc, char* argv[])
       //START SIMULATION
 
 	//Perform initial Euler operation to set things in motion
-	performEulerOperation(totalParticles, localParticles, myStart, myEnd, rank, position, 
-            numParticlesType1, energies, boundaries, oldPosition,
+	performEulerOperation(totalParticles, localParticles, myStart, myEnd, clusterParticles, numClusters, 
+            clusterID,  rank, position, numParticlesType1, energies, boundaries, oldPosition,
             acceleration, velocity, timestep, &tree, indices);
     
 	//Main loop - performing Verlet operations for the remainder of the simulation
 	unsigned count = 0;
 	for (currentTime = 2*timestep; currentTime < maxTime; currentTime += timestep)
 	{
-		performVerletOperation(totalParticles, localParticles, myStart, myEnd, rank,
+		performVerletOperation(totalParticles, localParticles, myStart, myEnd, 
+                  clusterParticles, numClusters, clusterID, rank,
                   position, numParticlesType1, energies, boundaries,
                   oldPosition, acceleration, velocity, timestep, halfInvTimestep,
                   dtsq, &tree, indices);
@@ -561,49 +574,72 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
       //            acceleration[i][j] *= 0.5;
 }
 
-void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int totalParticles, int localParticles, int myStart, int myEnd, int rank, 
-	double particlesType1, double *potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices)
+void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int totalParticles,
+     int localParticles, int myStart, 
+     int clusterParticles, int numClusters, int clusterID, int rank, double particlesType1,
+     double *potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices)
 {
       //Zero out current acceleration
       potentialEnergy[0] = 0;
-      //Zero out the old tree
-      //for(unsigned i = 0; i < tree->nodesArray.size(); i++)
-      //      tree->nodesArray[i].particleIndex = UNDEFINED;
                         
      tree->buildTree(0, position, indices, boundaries, rank);
 	//for(int i = myStart; i < myEnd; i++)
 
      //Have clusters of 8 processors take a chunk
-     for(int i = 0; i < totalParticles; i++)
+     int clusterStart = clusterParticles*clusterID;
+     int clusterEnd = clusterParticles*(clusterID + 1);
+     for(int i = clusterStart; i < clusterEnd; i++)
+     //for(int i = 0; i < totalParticles; i++)
 	{
             for(int j = 0; j < DIM; j++)
                   acceleration[i][j] = 0.0;		
             tree->calcAcc(rank % 8 + 1, i, position, acceleration[i], potentialEnergy);
 	}
      
-     //Tree reduce here
-     //MPI_Allreduce(MPI_IN_PLACE, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+     if(rank % 8 == 0)
+     {
+          MPI_Reduce(MPI_IN_PLACE, &acceleration[clusterStart], 3*clusterParticles, 
+               MPI_DOUBLE, MPI_SUM, 0, COMM_COLUMN);
+          if(rank == 0)
+               MPI_Gather(MPI_IN_PLACE, 3*clusterParticles, MPI_DOUBLE, acceleration, 3*clusterParticles, 
+                    MPI_DOUBLE, 0, COMM_ROW);
+          else
+               MPI_Gather(&acceleration[clusterStart], 3*clusterParticles, MPI_DOUBLE, acceleration,
+                    3*clusterParticles, MPI_DOUBLE, 0, COMM_ROW);                             
+     }
+     else
+     {
+          MPI_Reduce(&acceleration[clusterStart], &acceleration[clusterStart], 3*clusterParticles, 
+               MPI_DOUBLE, MPI_SUM, 0, COMM_COLUMN);
+     }           
      
+
+//     MPI_Allreduce(MPI_IN_PLACE, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+/*     
      if(rank == 0)     
           MPI_Reduce(MPI_IN_PLACE, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
      else
           MPI_Reduce(acceleration, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+*/               
      
      if(rank == 0)
-          MPI_Scatter(acceleration, 3*localParticles, MPI_DOUBLE, MPI_IN_PLACE, 3*localParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);     
+          MPI_Scatter(acceleration, 3*localParticles, MPI_DOUBLE, MPI_IN_PLACE, 3*localParticles, MPI_DOUBLE, 0,
+               MPI_COMM_WORLD);     
      else
-          MPI_Scatter(nullptr, 3*localParticles, MPI_DOUBLE, &acceleration[myStart], 3*localParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);  
-              
+          MPI_Scatter(nullptr, 3*localParticles, MPI_DOUBLE, &acceleration[myStart], 3*localParticles, MPI_DOUBLE,
+               0, MPI_COMM_WORLD);                
 }
 
 //Function that performs the Euler algorithm on all particles in the set
-void performEulerOperation(int totalParticles, int localParticles, int myStart, int myEnd, int rank,
+void performEulerOperation(int totalParticles, int localParticles, int myStart, int myEnd,
+      int clusterParticles, int numClusters, int clusterID, int rank,
       double (*position)[DIM], int particlesType1, double energies[2], double boundaries[6],
       double (*oldPosition)[DIM], double (*acceleration)[DIM], double (*velocity)[DIM],
       double timestep, Tree *tree, std::vector<int> &indices)
 {
      //calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
-	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart, myEnd, rank, particlesType1, &energies[1], boundaries, tree, indices);
+	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart, clusterParticles,
+          numClusters, clusterID, rank, particlesType1, &energies[1], boundaries, tree, indices);
 
 	double dotProd;
 
@@ -626,7 +662,7 @@ void performEulerOperation(int totalParticles, int localParticles, int myStart, 
 		energies[0] += (i < particlesType1) ? 0.5 * dotProd : dotProd;
 	}
 
-      double temp[2];
+     double temp[2];
 	MPI_Reduce(energies, temp, 2, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
      energies[0] = temp[0]; energies[1] = temp[1];
 
@@ -634,14 +670,16 @@ void performEulerOperation(int totalParticles, int localParticles, int myStart, 
 										 3*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 }
 
-void performVerletOperation(int totalParticles, int localParticles, int myStart, int myEnd, int rank,
-      double (*position)[DIM], int particlesType1, double energies[2],
+void performVerletOperation(int totalParticles, int localParticles, int myStart, int myEnd, 
+     int clusterParticles, int numClusters, int clusterID, int rank,
+     double (*position)[DIM], int particlesType1, double energies[2],
 	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
 	double (*velocity)[DIM], double timestep, double halfInvTimestep, double dtsq,
       Tree *tree, std::vector<int> &indices)
 {
       //calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
-	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart, myEnd, rank, particlesType1, &energies[1], boundaries, tree, indices);
+	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart, clusterParticles,
+          numClusters, clusterID, rank, particlesType1, &energies[1], boundaries, tree, indices);
 
 	double currentPosition;
 	double currentDisplacement;
