@@ -10,12 +10,14 @@
 #include <fstream>
 #include <random>
 #include <vector>
+#include <cstring>
 #include "mpi.h"
 
 #define DIM 3
 #define EMPTY_LEAF -1
 #define BRANCH -2
-#define UNDEFINED -3
+
+#define BARNES_HUT
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
@@ -38,44 +40,14 @@ struct Node{
 	int particleIndex;
 	double mass;
       double com[DIM];
+      //std::vector<int> indicesArray[8];
+      //double boundaryArray[8][6];      
 };
 
 class Tree{
 
       public:
-            MPI_Datatype nodeType;
-            MPI_Op mergeOp;
-
-            static void mergeNodes(void *in, void *inout, int *len, MPI_Datatype *dptr)
-            {
-                 int j;
-                 for(int i = 0; i < len[0]; i++)
-                  {
-                        if( (((Node* )inout)[i]).particleIndex != UNDEFINED)
-                        {
-                              //Deep copy the struct
-                              (((Node* )inout)[i]).particleIndex = (((Node* )in)[i]).particleIndex;
-                              (((Node* )inout)[i]).mass = (((Node* )in)[i]).mass;
-                              for(j = 0; j < DIM; j++)
-                                    (((Node* )inout)[i]).com[j] = (((Node* )in)[i]).com[j];
-                        }
-                  }
-            }
-
-            void init_mpi_ops()
-            {
-                  Node tempNode;
-                  int blockLengths[3] = {1, 1, DIM};
-                  MPI_Aint displacements[3] = {(size_t)&tempNode.particleIndex - (size_t)&tempNode,
-                        (size_t)&tempNode.mass - (size_t)&tempNode, (size_t)&tempNode.com - (size_t)&tempNode};
-                  MPI_Datatype types[3] = {MPI_INT, MPI_DOUBLE, MPI_DOUBLE};
-                  MPI_Type_create_struct(3, blockLengths, displacements, types, &nodeType);
-                  MPI_Type_commit(&nodeType); 
-                  MPI_Op_create(mergeNodes, true, &mergeOp);
-            }        
-	
 	      std::vector<Node> nodesArray;
-
 
             Tree()
             {
@@ -97,21 +69,16 @@ class Tree{
                   nodesArray = vec;
             }
 
-	//For parallel construction, Give each thread 1/n particles, have place into k (8 or 64) blocks. Merge the results. 
-	//(Or just do that on the master thread)
-	//Then spin up k processes to create
-	//an array based tree. Merge the trees. 
-	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double boundaries[6], int rank)
+      //Create vector based tree. Can split work among processes at second level.
+	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double *boundaries, int rank)
 	{	
             //if(rank == 0) printf("here %d\n", nodeIndex);
             //printf("here %d\n", nodeIndex);
             //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
             //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
-            unsigned oldSize = nodesArray.size();            
+                      
             if(nodeIndex >= nodesArray.size())
                  nodesArray.resize(nodeIndex + 1);
-            for(unsigned i = oldSize; i < nodeIndex + 1; i++)
-                  nodesArray[i].particleIndex = UNDEFINED;
 
 		if(partIndices.size() == 0)
 		{
@@ -122,17 +89,17 @@ class Tree{
 			nodesArray[nodeIndex].particleIndex = partIndices[0];
 			//Assume equivalent mass, otherwise will need to modify
 			nodesArray[nodeIndex].mass = 1.0;
-			for(int i = 0; i < DIM; i++)
-				nodesArray[nodeIndex].com[i] = position[partIndices[0]][i];		
+                  memcpy(&(nodesArray[nodeIndex].com[0]), &position[partIndices[0]][0], DIM*sizeof(double));	
 		}
 		else
 		{
 			//Assuming mass of one, sum mass
                   nodesArray[nodeIndex].particleIndex = BRANCH;
 			nodesArray[nodeIndex].mass = partIndices.size();
-			//Assuming mass of one, average location
-			for(int j = 0; j < DIM; j++)
-				nodesArray[nodeIndex].com[j] = 0.0;
+
+			//Assuming mass of one per particle, average location
+                  //Zero out center of mass
+                  memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
 			for(int i = 0; i < partIndices.size(); i++)
 			{
 				for(int j = 0; j < DIM; j++)
@@ -143,109 +110,99 @@ class Tree{
 			for(int j = 0; j < DIM; j++)
 				nodesArray[nodeIndex].com[j] /= partIndices.size();
 			
-			std::vector<int> indicesArray[8];
+			std::vector<int> indicesArray[8]; //Should probably save this rather than recreate every time.
+
+                  //Clear out old data, does not reallocate memory.
+                  //for(int i = 0; i < 8; i++)
+                  //      nodesArray[nodeIndex].indicesArray[i].clear();	
 			
 			//Create new boundaries
 			double halfX = 0.5*(boundaries[1] + boundaries[0]);
 			double halfY = 0.5*(boundaries[3] + boundaries[2]);
 			double halfZ = 0.5*(boundaries[5] + boundaries[4]);
-			double boundaryArray[8][6] = {{boundaries[0],halfX,boundaries[2],halfY,boundaries[4],halfZ},//bottom, front, left
-							      {boundaries[0],halfX,boundaries[2],halfY,halfZ,boundaries[5]},
+
+                  /*
+                  for(int i = 0; i < 8; i++)
+                  {
+                        if(i < 4)
+                        {
+                              nodesArray[nodeIndex].boundaryArray[i][0] = boundaries[0];
+                              nodesArray[nodeIndex].boundaryArray[i][1] = halfX;
+                        }
+                        else
+                        {
+                              nodesArray[nodeIndex].boundaryArray[i][0] = halfX;
+                              nodesArray[nodeIndex].boundaryArray[i][1] = boundaries[1];
+                        }
+
+                        if((i % 4) < 2)
+                        {
+                              nodesArray[nodeIndex].boundaryArray[i][2] = boundaries[2];
+                              nodesArray[nodeIndex].boundaryArray[i][3] = halfY;
+                        }
+                        else
+                        {
+                              nodesArray[nodeIndex].boundaryArray[i][2] = halfY;
+                              nodesArray[nodeIndex].boundaryArray[i][3] = boundaries[3];
+                        }
+
+                        if(i % 2 == 0)
+                        {
+                              nodesArray[nodeIndex].boundaryArray[i][4] = boundaries[4];
+                              nodesArray[nodeIndex].boundaryArray[i][5] = halfZ;
+                        }
+                        else
+                        {
+                              nodesArray[nodeIndex].boundaryArray[i][4] = halfZ;
+                              nodesArray[nodeIndex].boundaryArray[i][5] = boundaries[5];
+                        }                      
+                  }
+                  */
+                  
+                  //Perhaps save this as well, already know boundaries based on array index though?
+                  
+                  double boundaryArray[8][6] = {{boundaries[0],halfX,boundaries[2],halfY,boundaries[4],halfZ},//bottom, front, left
+                       				      {boundaries[0],halfX,boundaries[2],halfY,halfZ,boundaries[5]},
 							      {boundaries[0],halfX,halfY,boundaries[3],boundaries[4],halfZ},
 							      {boundaries[0],halfX,halfY,boundaries[3],halfZ,boundaries[5]},
                                                 {halfX,boundaries[1],boundaries[2],halfY,boundaries[4],halfZ},
 							      {halfX,boundaries[1],boundaries[2],halfY,halfZ,boundaries[5]},
 							      {halfX,boundaries[1],halfY,boundaries[3],boundaries[4],halfZ},
                                                 {halfX,boundaries[1],halfY,boundaries[3],halfZ,boundaries[5]}};
+                  
+                  
 
 			//Subdivide the indices based on boundaries
+                  char octant;
 			for(int i = 0; i < partIndices.size(); i++)
 			{
-				if(position[partIndices[i]][0] < halfX) //Bottom
-				{
-					if(position[partIndices[i]][1] < halfY) //Left
-					{
-						if(position[partIndices[i]][2] < halfZ) //Front
-						{
-							indicesArray[0].push_back(partIndices[i]);
-						}
-						else //Back
-						{
-							indicesArray[1].push_back(partIndices[i]);
-						}				
-					}
-					else //Right
-					{
-						if(position[partIndices[i]][2] < halfZ) //Front
-						{
-							indicesArray[2].push_back(partIndices[i]);
-						}
-						else //Back
-						{
-							indicesArray[3].push_back(partIndices[i]);
-						}
-					}
-				}
-				else //Top
-				{
-					if(position[partIndices[i]][1] < halfY) //Left
-					{
-						if(position[partIndices[i]][2] < halfZ) //Front
-						{
-							indicesArray[4].push_back(partIndices[i]);				
-						}
-						else //Back
-						{
-							indicesArray[5].push_back(partIndices[i]);
-						}				
-					}
-					else //Right
-					{
-						if(position[partIndices[i]][2] < halfZ) //Front
-						{
-							indicesArray[6].push_back(partIndices[i]);				
-						}
-						else //Back
-						{
-							indicesArray[7].push_back(partIndices[i]);
-						}
-					}
-				}
+                        octant = position[partIndices[i]][0] > halfX ? 4 : 0; 
+                        if(position[partIndices[i]][1] > halfY) octant |= 2;
+                        if(position[partIndices[i]][2] > halfZ) octant |= 1;
+                        indicesArray[octant].push_back(partIndices[i]);
 			}			
 									
 			//Build tree based on subdivisions //Can generize to handle any power of 8 based on size and nodeIndex
+                  //Could generalize to handle any 1, 2, 4, 8! Maybe more if subdivide at lower levels
                   if(nodeIndex == 0) //&& size >= 8 //Spin off new threads at first level
                   {
                         int index = rank % 8;
-                        buildTree(index + 1, position, indicesArray[index], boundaryArray[index], rank);                                   
-
-                        //Merge branches
-                        unsigned maxSize;
-                        unsigned oldSize = nodesArray.size();
-                        MPI_Allreduce(&oldSize, &maxSize, 1, MPI_UNSIGNED, MPI_MAX, MPI_COMM_WORLD);
-                        if(maxSize > nodesArray.size())                              
-                              nodesArray.resize(maxSize);
-                        for(unsigned i = oldSize; i < maxSize; i++)
-                              nodesArray[i].particleIndex = UNDEFINED;
-                        
-                        //TODO - DETERMINE HOW TO MERGE BRANCHES
-                        //Perhaps copy struct into three separate arrays, run three all reduces, and then copy back into a struct.
-                        //Although if that is necessary then it would be better to use three separate vectors instead of a 
-                        //vector of structs. Alternatively, define an MPI struct type and a sum operator for that type.
-                        //http://www.mcs.anl.gov/research/projects/mpi/mpi-standard/mpi-report-1.1/node80.htm
-                        //https://www.msi.umn.edu/workshops/mpi/hands-on/derived-datatypes/struct/assign
-                        
-                        //printf("here %d\n", nodeIndex);
-                        //MPI_Allreduce(MPI_IN_PLACE, &nodesArray[1], nodesArray.size() - 1, nodeType, mergeOp, MPI_COMM_WORLD);       
-                        //printf("here %d\n", nodeIndex);          
+                        buildTree(index + 1, position, indicesArray[index], boundaryArray[index], rank);     
+                        //buildTree(index + 1, position, indicesArray[index], 
+                        //      &(nodesArray[nodeIndex].boundaryArray[index][0]), rank);                                    
                   }
                   //Potential case for 64 processes.
                   //else if(nodeIndex > 0 && nodeIndex <= 9 && size >= 64)
                   //{}
                   else //Build 
                   {
-                        for(int i = 0; i < 8; i++)
-				      buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
+                        //double *boundPointer;
+                        for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
+                        {
+                              //boundPointer = nodesArray[nodeIndex].boundaryArray[i];
+				      //buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], boundPointer, rank);
+                              buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
+                        }
                   }          
 		}
 	}
@@ -312,15 +269,15 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int 
 
 //Function that performs the Euler algorithm on all particles in the set
 void performEulerOperation(int totalParticles, int localParticles, int myStart, int myEnd, int rank, 
-     int clusterParticles, int numClusters, int clusterID, double (*position)[DIM],	int particlesType1, double energies[2],
+      int clusterParticles, int numClusters, int clusterID, double (*position)[DIM],	int particlesType1, double energies[2],
 	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
 	double (*velocity)[DIM], double timestep, Tree *tree, std::vector<int> &indices);
 
 //Function that performs the Verlet algorithm on all particles in the set
 void performVerletOperation(int totalParticles, int localParticles, int myStart, int myEnd, int rank,
-     int clusterParticles, int numClusters, int clusterID, 
-     double (*position)[DIM], int particlesType1, double energies[2],
-	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
+      int clusterParticles, int numClusters, int clusterID, 
+      double (*position)[DIM], int particlesType1, double energies[2],
+      double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
 	double (*velocity)[DIM], double timestep, double halfInvTimestep, double dtsq,
       Tree *tree, std::vector<int> &indices);
 
@@ -336,16 +293,15 @@ void outputPosition(std::ofstream &positionFile, const double currentTime, doubl
 
 //Initializes 
 int initializeParticles(double (*position)[DIM], double (*velocity)[DIM], 
-                        int totalParticles, double boundaries[6]);
+      int totalParticles, double boundaries[6]);
 
 //Deletes arrays and closes files
 void cleanup(double (*position)[DIM], double (*oldPosition)[DIM],
-             double (*velocity)[DIM], double (*acceleration)[DIM]);
+      double (*velocity)[DIM], double (*acceleration)[DIM]);
 
 //=======================================================================================
 
 MPI_Comm COMM_COLUMN;
-MPI_Comm COMM_ROW;
 
 //The main function to execute the simulation
 int main(int argc, char* argv[])
@@ -386,14 +342,13 @@ int main(int argc, char* argv[])
 	int localParticles = totalParticles/size; 
 	int myStart = rank*localParticles;
 	int myEnd = (rank + 1)*localParticles;
-     int numClusters = size/8;
-     int clusterID = rank/8;
-     int clusterParticles = totalParticles / numClusters;     
-     int clusterStart = clusterParticles*clusterID;
-     int clusterEnd = clusterParticles*(clusterID + 1);
+      int numClusters = size/8;
+      int clusterID = rank/8;
+      int clusterParticles = totalParticles / numClusters;     
+      int clusterStart = clusterParticles*clusterID;
+      int clusterEnd = clusterParticles*(clusterID + 1);
 
-     MPI_Comm_split(MPI_COMM_WORLD, clusterID, rank, &COMM_COLUMN);
-     MPI_Comm_split(MPI_COMM_WORLD, rank % 8, rank, &COMM_ROW);
+      MPI_Comm_split(MPI_COMM_WORLD, clusterID, rank, &COMM_COLUMN);
 
       //Set energy variables
 	double energies[2], totalEnergy; //{kineticEnergy, potentialEnergy}
@@ -462,11 +417,12 @@ int main(int argc, char* argv[])
                   dtsq, &tree, indices);
 
             //output
-		count = (count + 1) % 10; //Can set print interval arbitrarily
-		if(count == 0 && rank == 0)
+		count++;  //Can set print interval arbitrarily
+		if(count >= 10 && rank == 0)
 		{
+                  count = 0;
 			totalEnergy = energies[0] + energies[1];
-               printf("%g %g %g %g\n", currentTime, energies[0], energies[1], totalEnergy);
+                  printf("%g %g %g %g\n", currentTime, energies[0], energies[1], totalEnergy);
 			outputPosition(positionFile, currentTime, position, totalParticles);
 			energyFile << currentTime << " " << totalEnergy << " " << energies[0]
                   << " " << energies[1] << "\n";
@@ -582,52 +538,49 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int 
       //Zero out current acceleration
       potentialEnergy[0] = 0;
                         
-     tree->buildTree(0, position, indices, boundaries, rank);
-	//for(int i = myStart; i < myEnd; i++)
+      tree->buildTree(0, position, indices, boundaries, rank);
 
-     //Have clusters of 8 processors take a chunk
-     int clusterStart = clusterParticles*clusterID;
-     int clusterEnd = clusterParticles*(clusterID + 1);
-     for(int i = clusterStart; i < clusterEnd; i++)
-     //for(int i = 0; i < totalParticles; i++)
-	{
-            for(int j = 0; j < DIM; j++)
-                  acceleration[i][j] = 0.0;		
+      //Have clusters of 8 processors take a chunk
+      //Can probably just pass in as function
+      int clusterStart = clusterParticles*clusterID;
+      int clusterEnd = clusterParticles*(clusterID + 1);
+     
+      //Set acceleration of clusterParticles to zero, this is legal 
+      //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
+      memset(&acceleration[clusterStart], 0, DIM*clusterParticles*sizeof(double));
+
+      for(int i = clusterStart; i < clusterEnd; i++)
+      {	
             tree->calcAcc(rank % 8 + 1, i, position, acceleration[i], potentialEnergy);
 	}
+
+      //printf("%d %d\n", rank, clusterStart);
+      MPI_Reduce_scatter_block(MPI_IN_PLACE, &acceleration[clusterStart], 
+            3*localParticles, MPI_DOUBLE, MPI_SUM, COMM_COLUMN);  
+      //Yuck, could modify verlet and euler to avoid this, but that might make switching between
+      //acceleration calculation versions difficult.
+      memmove(&acceleration[myStart], &acceleration[clusterStart], DIM*localParticles*sizeof(double));
+          
+     //Alternative implementation
      
+     /*
      if(rank % 8 == 0)
      {
-          MPI_Reduce(MPI_IN_PLACE, &acceleration[clusterStart], 3*clusterParticles, 
+            MPI_Reduce(MPI_IN_PLACE, &acceleration[clusterStart], 3*clusterParticles, 
                MPI_DOUBLE, MPI_SUM, 0, COMM_COLUMN);
-          if(rank == 0)
-               MPI_Gather(MPI_IN_PLACE, 3*clusterParticles, MPI_DOUBLE, acceleration, 3*clusterParticles, 
-                    MPI_DOUBLE, 0, COMM_ROW);
-          else
-               MPI_Gather(&acceleration[clusterStart], 3*clusterParticles, MPI_DOUBLE, acceleration,
-                    3*clusterParticles, MPI_DOUBLE, 0, COMM_ROW);                             
+
+            MPI_Scatter(&acceleration[myStart], 3*localParticles, MPI_DOUBLE, MPI_IN_PLACE, 3*localParticles,
+               MPI_DOUBLE, 0, COMM_COLUMN);             
      }
      else
      {
-          MPI_Reduce(&acceleration[clusterStart], &acceleration[clusterStart], 3*clusterParticles, 
+          MPI_Reduce(&acceleration[clusterStart], nullptr, 3*clusterParticles, 
                MPI_DOUBLE, MPI_SUM, 0, COMM_COLUMN);
-     }           
-     
 
-//     MPI_Allreduce(MPI_IN_PLACE, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-/*     
-     if(rank == 0)     
-          MPI_Reduce(MPI_IN_PLACE, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-     else
-          MPI_Reduce(acceleration, acceleration, 3*totalParticles, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-*/               
-     
-     if(rank == 0)
-          MPI_Scatter(acceleration, 3*localParticles, MPI_DOUBLE, MPI_IN_PLACE, 3*localParticles, MPI_DOUBLE, 0,
-               MPI_COMM_WORLD);     
-     else
           MPI_Scatter(nullptr, 3*localParticles, MPI_DOUBLE, &acceleration[myStart], 3*localParticles, MPI_DOUBLE,
-               0, MPI_COMM_WORLD);                
+               0, COMM_COLUMN);            
+     }
+     */          
 }
 
 //Function that performs the Euler algorithm on all particles in the set
@@ -637,9 +590,12 @@ void performEulerOperation(int totalParticles, int localParticles, int myStart, 
       double (*oldPosition)[DIM], double (*acceleration)[DIM], double (*velocity)[DIM],
       double timestep, Tree *tree, std::vector<int> &indices)
 {
-     //calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
+      #ifdef BARNES_HUT
 	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart, clusterParticles,
           numClusters, clusterID, rank, particlesType1, &energies[1], boundaries, tree, indices);
+      #else
+      calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
+      #endif
 
 	double dotProd;
 
@@ -662,24 +618,27 @@ void performEulerOperation(int totalParticles, int localParticles, int myStart, 
 		energies[0] += (i < particlesType1) ? 0.5 * dotProd : dotProd;
 	}
 
-     double temp[2];
+      double temp[2];
 	MPI_Reduce(energies, temp, 2, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-     energies[0] = temp[0]; energies[1] = temp[1];
+      energies[0] = temp[0]; energies[1] = temp[1];
 
 	MPI_Allgather(MPI_IN_PLACE, 3*localParticles, MPI_DOUBLE, position,
-										 3*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
+	      3*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 }
 
 void performVerletOperation(int totalParticles, int localParticles, int myStart, int myEnd, 
-     int clusterParticles, int numClusters, int clusterID, int rank,
-     double (*position)[DIM], int particlesType1, double energies[2],
+      int clusterParticles, int numClusters, int clusterID, int rank,
+      double (*position)[DIM], int particlesType1, double energies[2],
 	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
 	double (*velocity)[DIM], double timestep, double halfInvTimestep, double dtsq,
       Tree *tree, std::vector<int> &indices)
 {
-      //calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
+      #ifdef BARNES_HUT
 	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart, clusterParticles,
           numClusters, clusterID, rank, particlesType1, &energies[1], boundaries, tree, indices);
+      #else
+      calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
+      #endif
 
 	double currentPosition;
 	double currentDisplacement;
@@ -715,7 +674,7 @@ void performVerletOperation(int totalParticles, int localParticles, int myStart,
       energies[0] = temp[0]; energies[1] = temp[1];
 
 	MPI_Allgather(MPI_IN_PLACE, 3*localParticles, MPI_DOUBLE, position,
-										 3*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
+		3*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 }
 
 //CHANGE THESE FUNCTIONS IF WANT TO SUPPORT NON-ZERO LOWER BOUND
