@@ -39,9 +39,10 @@ inline double determineVectorFlat(const double p1Pos, const double p2Pos)
 struct Node{
 	int particleIndex;
 	double mass;
-      double com[DIM];
-      //std::vector<int> indicesArray[8];
-      //double boundaryArray[8][6];      
+      double com[DIM];  
+      //Run out of memory if save.
+      //double boundaries[8][6];
+      //double std::vector indicesArray[8];
 };
 
 class Tree{
@@ -110,56 +111,10 @@ class Tree{
 			for(int j = 0; j < DIM; j++)
 				nodesArray[nodeIndex].com[j] /= partIndices.size();
 			
-			std::vector<int> indicesArray[8]; //Should probably save this rather than recreate every time.
-
-                  //Clear out old data, does not reallocate memory.
-                  //for(int i = 0; i < 8; i++)
-                  //      nodesArray[nodeIndex].indicesArray[i].clear();	
-			
 			//Create new boundaries
-			double halfX = 0.5*(boundaries[1] + boundaries[0]);
-			double halfY = 0.5*(boundaries[3] + boundaries[2]);
-			double halfZ = 0.5*(boundaries[5] + boundaries[4]);
-
-                  /*
-                  for(int i = 0; i < 8; i++)
-                  {
-                        if(i < 4)
-                        {
-                              nodesArray[nodeIndex].boundaryArray[i][0] = boundaries[0];
-                              nodesArray[nodeIndex].boundaryArray[i][1] = halfX;
-                        }
-                        else
-                        {
-                              nodesArray[nodeIndex].boundaryArray[i][0] = halfX;
-                              nodesArray[nodeIndex].boundaryArray[i][1] = boundaries[1];
-                        }
-
-                        if((i % 4) < 2)
-                        {
-                              nodesArray[nodeIndex].boundaryArray[i][2] = boundaries[2];
-                              nodesArray[nodeIndex].boundaryArray[i][3] = halfY;
-                        }
-                        else
-                        {
-                              nodesArray[nodeIndex].boundaryArray[i][2] = halfY;
-                              nodesArray[nodeIndex].boundaryArray[i][3] = boundaries[3];
-                        }
-
-                        if(i % 2 == 0)
-                        {
-                              nodesArray[nodeIndex].boundaryArray[i][4] = boundaries[4];
-                              nodesArray[nodeIndex].boundaryArray[i][5] = halfZ;
-                        }
-                        else
-                        {
-                              nodesArray[nodeIndex].boundaryArray[i][4] = halfZ;
-                              nodesArray[nodeIndex].boundaryArray[i][5] = boundaries[5];
-                        }                      
-                  }
-                  */
-                  
-                  //Perhaps save this as well, already know boundaries based on array index though?
+			double halfX = 0.5*(boundaries[0] + boundaries[1]);
+			double halfY = 0.5*(boundaries[2] + boundaries[3]);
+			double halfZ = 0.5*(boundaries[4] + boundaries[5]);                
                   
                   double boundaryArray[8][6] = {{boundaries[0],halfX,boundaries[2],halfY,boundaries[4],halfZ},//bottom, front, left
                        				      {boundaries[0],halfX,boundaries[2],halfY,halfZ,boundaries[5]},
@@ -168,9 +123,9 @@ class Tree{
                                                 {halfX,boundaries[1],boundaries[2],halfY,boundaries[4],halfZ},
 							      {halfX,boundaries[1],boundaries[2],halfY,halfZ,boundaries[5]},
 							      {halfX,boundaries[1],halfY,boundaries[3],boundaries[4],halfZ},
-                                                {halfX,boundaries[1],halfY,boundaries[3],halfZ,boundaries[5]}};
-                  
-                  
+                                                {halfX,boundaries[1],halfY,boundaries[3],halfZ,boundaries[5]}};  
+
+			std::vector<int> indicesArray[8];               
 
 			//Subdivide the indices based on boundaries
                   char octant;
@@ -182,25 +137,20 @@ class Tree{
                         indicesArray[octant].push_back(partIndices[i]);
 			}			
 									
-			//Build tree based on subdivisions //Can generize to handle any power of 8 based on size and nodeIndex
+			//Build tree based on subdivisions //Can generalize to handle any power of 8 based on size and nodeIndex
                   //Could generalize to handle any 1, 2, 4, 8! Maybe more if subdivide at lower levels
                   if(nodeIndex == 0) //&& size >= 8 //Spin off new threads at first level
                   {
                         int index = rank % 8;
-                        buildTree(index + 1, position, indicesArray[index], boundaryArray[index], rank);     
-                        //buildTree(index + 1, position, indicesArray[index], 
-                        //      &(nodesArray[nodeIndex].boundaryArray[index][0]), rank);                                    
+                        buildTree(index + 1, position, indicesArray[index], boundaryArray[index], rank);                                       
                   }
                   //Potential case for 64 processes.
                   //else if(nodeIndex > 0 && nodeIndex <= 9 && size >= 64)
                   //{}
                   else //Build 
                   {
-                        //double *boundPointer;
                         for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                         {
-                              //boundPointer = nodesArray[nodeIndex].boundaryArray[i];
-				      //buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], boundPointer, rank);
                               buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
                         }
                   }          
@@ -314,6 +264,14 @@ int main(int argc, char* argv[])
       MPI_Comm_size(MPI_COMM_WORLD, &size);
       MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+      #ifdef BARNES_HUT
+      if(size % 8 != 0)
+      {            
+            printf("Error: Number of processes is not a multiple of 8\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+      }
+      #endif
+
       //START SETUP
 	clock_t tstart = clock();
 	/*CONSTANTS FOR REFERENCE THESE ARE HARDCODED*/
@@ -378,7 +336,7 @@ int main(int argc, char* argv[])
       }
 
 	//-----------------------------------------------------------------------//
-	// Distribute Data           						                //
+	// Distribute Data           						             //
 	MPI_Bcast(position, 3*totalParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);	 //
 	MPI_Bcast(velocity, 3*totalParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);	 //
 	//-----------------------------------------------------------------------//
@@ -550,37 +508,11 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int 
       memset(&acceleration[clusterStart], 0, DIM*clusterParticles*sizeof(double));
 
       for(int i = clusterStart; i < clusterEnd; i++)
-      {	
             tree->calcAcc(rank % 8 + 1, i, position, acceleration[i], potentialEnergy);
-	}
 
       //printf("%d %d\n", rank, clusterStart);
       MPI_Reduce_scatter_block(MPI_IN_PLACE, &acceleration[clusterStart], 
-            3*localParticles, MPI_DOUBLE, MPI_SUM, COMM_COLUMN);  
-      //Yuck, could modify verlet and euler to avoid this, but that might make switching between
-      //acceleration calculation versions difficult.
-      memmove(&acceleration[myStart], &acceleration[clusterStart], DIM*localParticles*sizeof(double));
-          
-     //Alternative implementation
-     
-     /*
-     if(rank % 8 == 0)
-     {
-            MPI_Reduce(MPI_IN_PLACE, &acceleration[clusterStart], 3*clusterParticles, 
-               MPI_DOUBLE, MPI_SUM, 0, COMM_COLUMN);
-
-            MPI_Scatter(&acceleration[myStart], 3*localParticles, MPI_DOUBLE, MPI_IN_PLACE, 3*localParticles,
-               MPI_DOUBLE, 0, COMM_COLUMN);             
-     }
-     else
-     {
-          MPI_Reduce(&acceleration[clusterStart], nullptr, 3*clusterParticles, 
-               MPI_DOUBLE, MPI_SUM, 0, COMM_COLUMN);
-
-          MPI_Scatter(nullptr, 3*localParticles, MPI_DOUBLE, &acceleration[myStart], 3*localParticles, MPI_DOUBLE,
-               0, COMM_COLUMN);            
-     }
-     */          
+            3*localParticles, MPI_DOUBLE, MPI_SUM, COMM_COLUMN);          
 }
 
 //Function that performs the Euler algorithm on all particles in the set
@@ -597,6 +529,7 @@ void performEulerOperation(int totalParticles, int localParticles, int myStart, 
       calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
       #endif
 
+      int accStart = clusterParticles*clusterID - myStart;
 	double dotProd;
 
 	int j;
@@ -608,7 +541,11 @@ void performEulerOperation(int totalParticles, int localParticles, int myStart, 
 		{
 			oldPosition[i][j] = position[i][j];
 			position[i][j] += (velocity[i][j] * timestep);
+                  #ifdef BARNES_HUT
+                  velocity[i][j] += acceleration[accStart + i][j] * timestep;
+                  #else
 			velocity[i][j] += (acceleration[i][j] * timestep);
+                  #endif
 
                   applySolidBoundary(position[i][j], oldPosition[i][j], &boundaries[2*j]);
                   //applyPeriodicBoundary(position[i][j], oldPosition[i][j], boundaries[2*j]);
@@ -646,16 +583,22 @@ void performVerletOperation(int totalParticles, int localParticles, int myStart,
 	double dotProd;
 	int j;
       double tmp;
+      int accStart = clusterParticles*clusterID - myStart;
 	energies[0] = 0;
+  
 
-	for (int i = myStart; i < myEnd; i++)
+      for (int i = myStart; i < myEnd; i++)
 	{
 		// Vector Verlet Method, unroll the loops? Compiler takes care of?
 		dotProd = 0;
         	for(j = 0; j < DIM; ++j) //Loop over all directions
 		{
 			currentDisplacement = position[i][j] - oldPosition[i][j];
+                  #ifdef BARNES_HUT
+                  futureDisplacement = currentDisplacement + (dtsq * acceleration[accStart + i][j]);
+                  #else
 			futureDisplacement = currentDisplacement + (dtsq * acceleration[i][j]);
+                  #endif
 			currentPosition = position[i][j];
 			position[i][j] = position[i][j] + futureDisplacement;
 			velocity[i][j] = (position[i][j] - oldPosition[i][j]) * (halfInvTimestep);
