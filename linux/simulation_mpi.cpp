@@ -17,7 +17,7 @@
 #define EMPTY_LEAF -1
 #define BRANCH -2
 
-#define BARNES_HUT
+//#define BARNES_HUT
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
@@ -214,22 +214,22 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
 
 //Barnes-Hut version
 void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int totalParticles, int localParticles,
-      int myStart, int clusterParticles, int numClusters, int clusterID, int rank, double particlesType1,
+      int myStart, int numClusters, int clusterID, int rank, double particlesType1,
       double *potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices);
 
 //Function that performs the Euler algorithm on all particles in the set
 void performEulerOperation(int totalParticles, int localParticles, int myStart, int myEnd,
-      int clusterParticles, int clusterStart, int clusterEnd, int rank,
+      int clusterStart, int clusterEnd, int rank,
       double (*position)[DIM], int particlesType1, double energies[2], double boundaries[6],
       double (*oldPosition)[DIM], double (*acceleration)[DIM], double (*velocity)[DIM],
       double timestep, Tree *tree, std::vector<int> &indices);
 
 //Function that performs the Verlet algorithm on all particles in the set
 void performVerletOperation(int totalParticles, int localParticles, int myStart, int myEnd, 
-      int clusterParticles, int clusterStart, int clusterEnd, int rank,
+      int clusterStart, int clusterEnd, int rank,
       double (*position)[DIM], int particlesType1, double energies[2],
 	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
-	double (*velocity)[DIM], double timestep, double halfInvTimestep, double dtsq,
+	double (*velocity)[DIM], double timestep, double halfInvTimestep,
       Tree *tree, std::vector<int> &indices);
 
 //Translates particles that have exited the simulation area back into the 
@@ -289,7 +289,6 @@ int main(int argc, char* argv[])
 	double timestep = 0.005; //Can be arbitrarily small
 	double maxTime = 10; //Can be arbitrarily long or short
 	double halfInvTimestep = 0.5/timestep; //needed for Verlet
-	double dtsq = timestep*timestep;
 	double currentTime = 0;
 
       //Set variables for number of particles
@@ -301,7 +300,7 @@ int main(int argc, char* argv[])
 	int localParticles = totalParticles/size; 
 	int myStart = rank*localParticles;
 	int myEnd = (rank + 1)*localParticles;
-      int numClusters = size/8;
+      int numClusters = std::max(1, size/8);
       int clusterID = rank/8;
       int clusterParticles = totalParticles / numClusters;     
       int clusterStart = clusterParticles*clusterID;
@@ -361,8 +360,9 @@ int main(int argc, char* argv[])
       //START SIMULATION
 
 	//Perform initial Euler operation to set things in motion
+
 	performEulerOperation(totalParticles, localParticles, myStart, myEnd, clusterStart, 
-            clusterParticles, clusterEnd, rank, position, numParticlesType1, energies, boundaries, oldPosition,
+            clusterEnd, rank, position, numParticlesType1, energies, boundaries, oldPosition,
             acceleration, velocity, timestep, &tree, indices);
     
 	//Main loop - performing Verlet operations for the remainder of the simulation
@@ -370,10 +370,10 @@ int main(int argc, char* argv[])
 	for (currentTime = 2*timestep; currentTime < maxTime; currentTime += timestep)
 	{
 		performVerletOperation(totalParticles, localParticles, myStart, myEnd, 
-                  clusterParticles, clusterStart, clusterEnd, rank,
+                  clusterStart, clusterEnd, rank,
                   position, numParticlesType1, energies, boundaries,
                   oldPosition, acceleration, velocity, timestep, halfInvTimestep,
-                  dtsq, &tree, indices);
+                  &tree, indices);
 
             //output
 		count++;  //Can set print interval arbitrarily
@@ -421,9 +421,7 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
       int i, j, k;
 	
 	//Zero out acceleration, can't do this inside the main loop because we also access the jth entry
-	for(i = 0; i < totalParticles; i++)
-            for(j = 0; j < DIM; j++)
-                  acceleration[i][j] = 0.0;
+      memset(&acceleration[myStart], 0, DIM*(myEnd - myStart)*sizeof(double));	
 
 	for (i = myStart; i < myEnd; i++)
 	{
@@ -452,8 +450,7 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
 
                         for(k = 0; k < DIM; k++)
                         {
-                              vectors[k] *= forceCoeff;
-                              acceleration[i][k] += vectors[k];
+                              acceleration[i][k] += vectors[k]*forceCoeff;
                         }
 
                         potentialEnergy[0] += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
@@ -484,8 +481,7 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
 
                         for(k = 0; k < DIM; k++)
                         {
-                              vectors[k] *= forceCoeff;
-                              acceleration[i][k] += vectors[k];
+                              acceleration[i][k] += vectors[k]*forceCoeff;
                         }
 
                         potentialEnergy[0] += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
@@ -500,17 +496,17 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
 }
 
 void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int totalParticles,
-     int localParticles, int myStart, int clusterParticles, int clusterStart, int clusterEnd,
+     int localParticles, int myStart, int clusterStart, int clusterEnd,
      int rank, double particlesType1,
      double *potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices)
-{                        
-      tree->buildTree(0, position, indices, boundaries, rank);
-     
-      //Set acceleration of clusterParticles to zero, this is legal 
+{                             
+      //Set acceleration of cluster particles to zero, this is legal 
       //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
-      memset(&acceleration[clusterStart], 0, DIM*clusterParticles*sizeof(double));
+      memset(&acceleration[clusterStart], 0, DIM*(clusterEnd - clusterStart)*sizeof(double));
       //Zero out potential energy
       potentialEnergy[0] = 0;
+
+      tree->buildTree(0, position, indices, boundaries, rank);
 
       for(int i = clusterStart; i < clusterEnd; i++)
             tree->calcAcc(rank % 8 + 1, i, position, acceleration[i], potentialEnergy);
@@ -522,14 +518,14 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], int 
 
 //Function that performs the Euler algorithm on all particles in the set
 void performEulerOperation(int totalParticles, int localParticles, int myStart, int myEnd,
-      int clusterParticles, int clusterStart, int clusterEnd, int rank,
+      int clusterStart, int clusterEnd, int rank,
       double (*position)[DIM], int particlesType1, double energies[2], double boundaries[6],
       double (*oldPosition)[DIM], double (*acceleration)[DIM], double (*velocity)[DIM],
       double timestep, Tree *tree, std::vector<int> &indices)
 {
       #ifdef BARNES_HUT
 	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart, clusterStart,
-          clusterParticles, clusterEnd, rank, particlesType1, &energies[1], boundaries, tree, indices);
+          clusterEnd, rank, particlesType1, &energies[1], boundaries, tree, indices);
       #else
       calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
       #endif
@@ -565,14 +561,14 @@ void performEulerOperation(int totalParticles, int localParticles, int myStart, 
 }
 
 void performVerletOperation(int totalParticles, int localParticles, int myStart, int myEnd, 
-      int clusterParticles, int clusterStart, int clusterEnd, int rank,
+      int clusterStart, int clusterEnd, int rank,
       double (*position)[DIM], int particlesType1, double energies[2],
 	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
-	double (*velocity)[DIM], double timestep, double halfInvTimestep, double dtsq,
+	double (*velocity)[DIM], double timestep, double halfInvTimestep,
       Tree *tree, std::vector<int> &indices)
 {
       #ifdef BARNES_HUT
-	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart, clusterParticles,
+	calcAcceleration(acceleration, position, totalParticles, localParticles, myStart,
           clusterStart, clusterEnd, rank, particlesType1, &energies[1], boundaries, tree, indices);
       #else
       calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, &energies[1], boundaries);
@@ -582,8 +578,8 @@ void performVerletOperation(int totalParticles, int localParticles, int myStart,
 	double currentDisplacement;
 	double futureDisplacement;
 	double dotProd;
+      double dtsq = timestep*timestep;
 	int j;
-      double tmp;
       int accStart = clusterStart - myStart;
 	energies[0] = 0;
   
