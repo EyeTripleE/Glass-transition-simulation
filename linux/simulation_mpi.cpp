@@ -18,9 +18,12 @@
 #define EMPTY_LEAF -1
 #define BRANCH -2
 
-#define BARNES_HUT
-#define HYBRID
-#define OUTPUT
+//#define BARNES_HUT //Barnes Hut or strips?
+#define CUTOFF //If strips, use cutoff distance or not?
+//#define HYBRID //Use OpenMP?
+#define OUTPUT //print output?
+
+#define PARTICLES 1024
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
@@ -313,7 +316,8 @@ int main(int argc, char* argv[])
 	double currentTime = 0;
 
       //Set variables for number of particles
-	int numParticlesType1 = 1024;
+      int numParticlesType1 = PARTICLES;
+	//int numParticlesType1 = 1024;
 	int numParticlesType2 = 0;
 	int totalParticles = numParticlesType1 + numParticlesType2;
 
@@ -463,7 +467,9 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
                         pythagorean += vectors[k]*vectors[k];
                   }
 
+                  #ifdef CUTOFF
 			if (pythagorean < 16.0)
+                  #endif
 			{
 				//Force derived from Lennard-Jones potential
 				sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);				
@@ -494,7 +500,9 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
                         pythagorean += vectors[k]*vectors[k];
                   }
 
+                  #ifdef CUTOFF
 			if (pythagorean < 16.0)
+                  #endif
 			{
 				//Force derived from Lennard-Jones potential
 				sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);				
