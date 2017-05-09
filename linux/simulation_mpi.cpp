@@ -236,10 +236,10 @@ double calcKineticEnergy(int myStart, int myEnd, double (*position)[DIM], double
 
 //Translates particles that have exited the simulation area back into the 
 //Simulation region, works in one direction so do for every direction
-void applyPeriodicBoundary(double &position, double &oldPosition, double *boundary);
+void applyPeriodicBoundary(double &position, double &oldPosition, double boundary[2]);
 
 //Bounce particle off wall
-void applySolidBoundary(double &position, double &oldPosition, double *boundary);
+void applySolidBoundary(double &position, double &oldPosition, double boundary[2]);
 
 //Outputs to position file
 void outputPosition(std::ofstream &positionFile, const double currentTime, double (*position)[DIM], const int totalParticles);
@@ -339,8 +339,8 @@ int main(int argc, char* argv[])
 
 	//-----------------------------------------------------------------------//
 	// Distribute Data           						             //
-	MPI_Bcast(position, 3*totalParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);	 //
-	MPI_Bcast(velocity, 3*totalParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);	 //
+	MPI_Bcast(position, DIM*totalParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);	 //
+	MPI_Bcast(velocity, DIM*totalParticles, MPI_DOUBLE, 0, MPI_COMM_WORLD);	 //
 	//-----------------------------------------------------------------------//
 
 	//Create data files	
@@ -512,7 +512,7 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM],
 
       //printf("%d %d\n", rank, clusterStart);
       MPI_Reduce_scatter_block(MPI_IN_PLACE, &acceleration[clusterStart], 
-            3*localParticles, MPI_DOUBLE, MPI_SUM, COMM_COLUMN);          
+            DIM*localParticles, MPI_DOUBLE, MPI_SUM, COMM_COLUMN);          
 }
 
 //Function that performs the Euler algorithm on all particles in the set
@@ -533,8 +533,8 @@ void performEulerOperation(int myStart, int myEnd,
 	}
 
       int localParticles = myEnd - myStart;
-	MPI_Allgather(MPI_IN_PLACE, 3*localParticles, MPI_DOUBLE, position,
-	      3*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
+	MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
+	      DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 }
 
 void performVerletOperation(int totalParticles, int myStart, int myEnd, 
@@ -576,8 +576,8 @@ void performVerletOperation(int totalParticles, int myStart, int myEnd,
 		}
 	}
 
-	MPI_Allgather(MPI_IN_PLACE, 3*localParticles, MPI_DOUBLE, position,
-		3*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
+	MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
+		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 }
 
 double calcKineticEnergy(int myStart, int myEnd, double (*position)[DIM], double (*oldPosition)[DIM],
@@ -601,7 +601,7 @@ double calcKineticEnergy(int myStart, int myEnd, double (*position)[DIM], double
 }
 
 //CHANGE THESE FUNCTIONS IF WANT TO SUPPORT NON-ZERO LOWER BOUND
-void applyPeriodicBoundary(double &position, double &oldPosition, double *boundary)
+void applyPeriodicBoundary(double &position, double &oldPosition, double boundary[2])
 {
 	if(position < boundary[0])
 	{
@@ -617,7 +617,7 @@ void applyPeriodicBoundary(double &position, double &oldPosition, double *bounda
 	}
 }
 
-void applySolidBoundary(double &position, double &oldPosition, double *boundary)
+void applySolidBoundary(double &position, double &oldPosition, double boundary[2])
 {
 	//If pass in both axis boundaries, could do this with one if statement
 	if(position < boundary[0])
