@@ -423,13 +423,13 @@ int main(int argc, char* argv[])
             #endif
 	}     
       
-      if(rank == 0)
-      {
-	      printf("Total time (s): %g\n", (double)(clock() - tstart) / CLOCKS_PER_SEC); 
-	      positionFile.close();
-	      energyFile.close();
-      }
 	cleanup(position, velocity, acceleration, oldPosition);
+      
+      MPI_Finalize();
+
+	printf("Total time (s): %g\n", (double)(clock() - tstart) / CLOCKS_PER_SEC); 
+      positionFile.close();
+      energyFile.close();
 
 	return 0;
 }
