@@ -149,7 +149,7 @@ class Tree{
 
 			//Subdivide the indices based on boundaries
                   char octant;
-                  #pragma parallel for private(octant)
+                  #pragma omp parallel for private(octant)
 			for(int i = 0; i < partIndices.size(); i++)
 			{
                         octant = position[partIndices[i]][0] > halfX ? 4 : 0; 
