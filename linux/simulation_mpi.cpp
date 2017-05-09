@@ -13,6 +13,7 @@
 #include <cstring>
 #include "mpi.h"
 #include <omp.h>
+#include <chrono>
 
 #define DIM 3
 #define EMPTY_LEAF -1
@@ -20,7 +21,7 @@
 
 //#define BARNES_HUT //Barnes Hut or strips?
 #define CUTOFF //If strips, use cutoff distance or not?
-//#define HYBRID //Use OpenMP?
+#define HYBRID //Use OpenMP?
 //#define OUTPUT //print output?
 
 #define PARTICLES 1024
@@ -298,7 +299,8 @@ int main(int argc, char* argv[])
       #endif
 
       //START SETUP
-	clock_t tstart = clock();
+	//clock_t tstart = clock();
+	auto start_time = std::chrono::high_resolution_clock::now();
 	/*CONSTANTS FOR REFERENCE THESE ARE HARDCODED*/
 	//constants 0.5(sigma1 + sigma2)
 	//double sigma1to1 = 1; //in units of sigma
@@ -427,10 +429,13 @@ int main(int argc, char* argv[])
 
       if(rank == 0)
       {
+	      //printf("Total time (s): %g\n", (double)(clock() - tstart) / CLOCKS_PER_SEC); 
+            std::chrono::high_resolution_clock::duration diff = std::chrono::high_resolution_clock::now()-start_time;
+	      std::cout<<"Time taken = "<<diff.count()<<std::endl;       
             positionFile.close();
             energyFile.close();
       }
-	printf("Total time (s): %g\n", (double)(clock() - tstart) / CLOCKS_PER_SEC); 
+
 
       MPI_Finalize();
 
