@@ -445,7 +445,6 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
 	double sigma, sigmaPow6, sigmaPow12;
 	double pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6;
 	double vectors[DIM], forceCoeff;
-	potentialEnergy = 0;
       int j, k;
 	
       //If not hybrid then set this all at once
@@ -453,7 +452,8 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
       memset(&acceleration[myStart], 0, DIM*(myEnd - myStart)*sizeof(double));
       #endif	
 
-      #pragma omp parallel for reduction(+:potentialEnergy) private(j, k, sigma, sigmaPow6, sigmaPow12, \
+      double pe = 0;
+      #pragma omp parallel for reduction(+:pe) private(j, k, sigma, sigmaPow6, sigmaPow12, \
       pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6, vectors, forceCoeff)
 	for (int i = myStart; i < myEnd; i++)
 	{
@@ -490,7 +490,7 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
                               acceleration[i][k] += vectors[k]*forceCoeff;
                         }
 
-                        potentialEnergy += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
+                        pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
 			}
 		}
 		for (j = i + 1; j < totalParticles; j++)
@@ -523,10 +523,12 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
                               acceleration[i][k] += vectors[k]*forceCoeff;
                         }
 
-                        potentialEnergy += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
+                        pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
 			}
 		}
 	}
+
+      potentialEnergy = pe;
 
 	//Because type two particles are twice as heavy
 	//for (i = particlesType1; i < totalParticles; ++i)
@@ -547,19 +549,18 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM],
       memset(&acceleration[clusterStart], 0, DIM*(clusterEnd - clusterStart)*sizeof(double));
       #endif
 
-      //Zero out potential energy
-      potentialEnergy = 0;
-
       tree->buildTree(0, position, indices, boundaries, rank);
 
-      #pragma omp parallel for reduction(+:potentialEnergy)
+      double pe = 0;
+      #pragma omp parallel for reduction(+:pe)
       for(int i = clusterStart; i < clusterEnd; i++)
       {
             #ifdef HYBRID
             memset(&acceleration[i][0], 0, DIM*sizeof(double)); 
             #endif
-            tree->calcAcc(rank % 8 + 1, i, position, acceleration[i], potentialEnergy);
+            tree->calcAcc(rank % 8 + 1, i, position, acceleration[i], pe);
       }
+      potentialEnergy = pe;
 
       //could use non-blocking here, but there isn't a whole lot of work to do
       //before the information is needed.
