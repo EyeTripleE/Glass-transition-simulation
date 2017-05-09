@@ -402,8 +402,10 @@ int main(int argc, char* argv[])
                   if(rank == 0) 
                   {                 
                         MPI_Reduce(MPI_IN_PLACE, energies, 2, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-                        totalEnergy = energies[0] + energies[1];
-                        
+
+                        //Ideally would spin off thread to handle, since we're benchmarking without OUTPUT
+                        //this isn't necessary.
+                        totalEnergy = energies[0] + energies[1];                        
                         printf("%g %g %g %g\n", currentTime, energies[0], energies[1], totalEnergy);
 			      outputPosition(positionFile, currentTime, position, totalParticles);
 			      energyFile << currentTime << " " << totalEnergy << " " << energies[0]
@@ -548,7 +550,8 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM],
             tree->calcAcc(rank % 8 + 1, i, position, acceleration[i], potentialEnergy);
       }
 
-      //could use non-blocking here
+      //could use non-blocking here, but there isn't a whole lot of work to do
+      //before the information is needed.
       MPI_Reduce_scatter_block(MPI_IN_PLACE, &acceleration[clusterStart], 
             DIM*localParticles, MPI_DOUBLE, MPI_SUM, COMM_COLUMN);          
 }
@@ -616,7 +619,8 @@ void performVerletOperation(int totalParticles, int myStart, int myEnd,
 		}
 	}
 
-      //Could use non-blocking here
+      //Could use non-blocking here but there isn't a whole lot of work to do
+      //before this information is needed.
 	MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
 		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 }
