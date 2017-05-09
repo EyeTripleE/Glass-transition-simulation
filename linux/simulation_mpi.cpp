@@ -21,7 +21,7 @@
 //#define BARNES_HUT //Barnes Hut or strips?
 #define CUTOFF //If strips, use cutoff distance or not?
 //#define HYBRID //Use OpenMP?
-#define OUTPUT //print output?
+//#define OUTPUT //print output?
 
 #define PARTICLES 1024
 
@@ -424,12 +424,15 @@ int main(int argc, char* argv[])
 	}     
       
 	cleanup(position, velocity, acceleration, oldPosition);
-      
-      MPI_Finalize();
 
+      if(rank == 0)
+      {
+            positionFile.close();
+            energyFile.close();
+      }
 	printf("Total time (s): %g\n", (double)(clock() - tstart) / CLOCKS_PER_SEC); 
-      positionFile.close();
-      energyFile.close();
+
+      MPI_Finalize();
 
 	return 0;
 }
