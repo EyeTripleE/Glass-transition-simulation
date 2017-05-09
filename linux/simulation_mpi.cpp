@@ -12,12 +12,15 @@
 #include <vector>
 #include <cstring>
 #include "mpi.h"
+#include <omp.h>
 
 #define DIM 3
 #define EMPTY_LEAF -1
 #define BRANCH -2
 
 #define BARNES_HUT
+#define HYBRID
+#define OUTPUT
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
@@ -59,8 +62,11 @@ class Tree{
 		{
                   //init_mpi_ops();
 			std::vector<int> indices(numParticles);
-			for(int i = 0; i < numParticles; i++)				
+                  #pragma omp parallel for
+			for(int i = 0; i < numParticles; i++)
+                  {				
                         indices[i] = i;		
+                  }
 			buildTree(0, position, indices, boundaries, rank);
 		};
 
@@ -101,15 +107,26 @@ class Tree{
 			//Assuming mass of one per particle, average location
                   //Zero out center of mass
                   memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
+
+                  int index;
+                  double com0 = 0;
+                  double com1 = 0;
+                  double com2 = 0;
+             
+                  #pragma omp parallel for reduction(+:com0, com1, com2) private(index)
 			for(int i = 0; i < partIndices.size(); i++)
 			{
-				for(int j = 0; j < DIM; j++)
-				{
-					nodesArray[nodeIndex].com[j] += position[partIndices[i]][j]; 
-				}
+                        index = partIndices[i];
+                        com0 += position[index][0];
+                        com1 += position[index][1];
+                        //Same as com1 if DIM == 2
+                        com2 += position[index][DIM - 1];
 			}
-			for(int j = 0; j < DIM; j++)
-				nodesArray[nodeIndex].com[j] /= partIndices.size();
+
+                  double invSize = 1.0/partIndices.size();
+                  nodesArray[nodeIndex].com[0] = com0*invSize;
+                  nodesArray[nodeIndex].com[1] = com1*invSize;
+                  nodesArray[nodeIndex].com[DIM - 1] = com2*invSize;
 			
 			//Create new boundaries
 			double halfX = 0.5*(boundaries[0] + boundaries[1]);
@@ -129,6 +146,7 @@ class Tree{
 
 			//Subdivide the indices based on boundaries
                   char octant;
+                  #pragma parallel for private(octant)
 			for(int i = 0; i < partIndices.size(); i++)
 			{
                         octant = position[partIndices[i]][0] > halfX ? 4 : 0; 
@@ -148,7 +166,8 @@ class Tree{
                   //else if(nodeIndex > 0 && nodeIndex <= 9 && size >= 64)
                   //{}
                   else //Build 
-                  {
+                  { 
+                        //Omp task is not thread save because the tree is resized
                         for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                         {
                               buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
@@ -374,8 +393,7 @@ int main(int argc, char* argv[])
                   position, numParticlesType1, boundaries,
                   oldPosition, acceleration, timestep, &tree, indices, energies[1]);
 
-            //output
-            /*
+            #ifdef OUTPUT
 		count++;  //Can set print interval arbitrarily
 		if(count >= 10)
 		{
@@ -396,7 +414,7 @@ int main(int argc, char* argv[])
                         MPI_Reduce(energies, nullptr, 2, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);	
                   }
 		}
-            */
+            #endif
 	}     
       
       if(rank == 0)
@@ -419,13 +437,20 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
 	double pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6;
 	double vectors[DIM], forceCoeff;
 	potentialEnergy = 0;
-      int i, j, k;
+      int j, k;
 	
-	//Zero out acceleration, can't do this inside the main loop because we also access the jth entry
-      memset(&acceleration[myStart], 0, DIM*(myEnd - myStart)*sizeof(double));	
+      //If not hybrid then set this all at once
+      #ifndef HYBRID
+      memset(&acceleration[myStart], 0, DIM*(myEnd - myStart)*sizeof(double));
+      #endif	
 
-	for (i = myStart; i < myEnd; i++)
+      #pragma omp parallel for reduction(+:potentialEnergy) private(j, k, sigma, sigmaPow6, sigmaPow12, \
+      pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6, vectors, forceCoeff)
+	for (int i = myStart; i < myEnd; i++)
 	{
+            #ifdef HYBRID
+            memset(&acceleration[i][0], 0, DIM*sizeof(double));
+            #endif
 		for (j = 0; j < i; j++)
 		{
                   pythagorean = 0;
@@ -501,18 +526,29 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM],
      int rank, double particlesType1,
      double &potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices)
 {                             
+      //Figure out how to hybridize
+     
       //Set acceleration of cluster particles to zero, this is legal 
       //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
+      #ifndef HYBRID
       memset(&acceleration[clusterStart], 0, DIM*(clusterEnd - clusterStart)*sizeof(double));
+      #endif
+
       //Zero out potential energy
       potentialEnergy = 0;
 
       tree->buildTree(0, position, indices, boundaries, rank);
 
+      #pragma omp parallel for reduction(+:potentialEnergy)
       for(int i = clusterStart; i < clusterEnd; i++)
+      {
+            #ifdef HYBRID
+            memset(&acceleration[i][0], 0, DIM*sizeof(double)); 
+            #endif
             tree->calcAcc(rank % 8 + 1, i, position, acceleration[i], potentialEnergy);
+      }
 
-      //printf("%d %d\n", rank, clusterStart);
+      //could use non-blocking here
       MPI_Reduce_scatter_block(MPI_IN_PLACE, &acceleration[clusterStart], 
             DIM*localParticles, MPI_DOUBLE, MPI_SUM, COMM_COLUMN);          
 }
@@ -523,6 +559,7 @@ void performEulerOperation(int myStart, int myEnd,
       double boundaries[6], double timestep)
 {
 	int j;
+      #pragma omp parallel for private(j)
 	for (int i = myStart; i < myEnd; i++)
 	{
 		for (j = 0; j < DIM; ++j)
@@ -559,6 +596,7 @@ void performVerletOperation(int totalParticles, int myStart, int myEnd,
       calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, potentialEnergy, boundaries);
       #endif
   
+      #pragma omp parallel for private(j, currentPosition, futureDisplacement)
       for (int i = myStart; i < myEnd; i++)
 	{
 		// Vector Verlet Method
@@ -578,6 +616,7 @@ void performVerletOperation(int totalParticles, int myStart, int myEnd,
 		}
 	}
 
+      //Could use non-blocking here
 	MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
 		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 }
@@ -589,6 +628,7 @@ double calcKineticEnergy(int myStart, int myEnd, double (*position)[DIM], double
       double dotProd;
       double ke = 0;
       int j;
+      #pragma omp parallel for reduction(+:ke) private(j, velocity, dotProd)
       for(int i = myStart; i < myEnd; i++)
       {
             dotProd = 0;
