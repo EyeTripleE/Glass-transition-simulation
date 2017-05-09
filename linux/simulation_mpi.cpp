@@ -375,6 +375,7 @@ int main(int argc, char* argv[])
                   oldPosition, acceleration, timestep, &tree, indices, energies[1]);
 
             //output
+            /*
 		count++;  //Can set print interval arbitrarily
 		if(count >= 10)
 		{
@@ -395,6 +396,7 @@ int main(int argc, char* argv[])
                         MPI_Reduce(energies, nullptr, 2, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);	
                   }
 		}
+            */
 	}     
       
       if(rank == 0)
