@@ -1,0 +1,37 @@
+Strips with pure MPI
+Particles 1024 Processes 8 Time taken = 3350432803
+Particles 1024 Processes 16 Time taken = 2034053665
+Particles 1024 Processes 32 Time taken = 1699479910
+Particles 1024 Processes 64 Time taken = 643653464
+Particles 2048 Processes 8 Time taken = 11811687914
+Particles 2048 Processes 16 Time taken = 7353792049
+Particles 2048 Processes 32 Time taken = 5892053479
+Particles 2048 Processes 64 Time taken = 2252618546
+Particles 4096 Processes 8 Time taken = 46842627212
+Particles 4096 Processes 16 Time taken = 25659255434
+Particles 4096 Processes 32 Time taken = 20419950878
+Particles 4096 Processes 64 Time taken = 8774376279
+Particles 8192 Processes 8 Time taken = 171481446273
+Particles 8192 Processes 16 Time taken = 93732704426
+Particles 8192 Processes 32 Time taken = 69005085450
+Particles 8192 Processes 64 Time taken = 33668178216
+
+Strips with OpenMP
+Particles 1024 Processes 8 Time taken = 3925178450
+Particles 1024 Processes 16 Time taken = 2012033157
+Particles 1024 Processes 32 Time taken = 1206903696
+Particles 1024 Processes 64 Time taken = 696041759
+Particles 2048 Processes 8 Time taken = 11439117527
+Particles 2048 Processes 16 Time taken = 7194687889
+Particles 2048 Processes 32 Time taken = 4115361915
+Particles 2048 Processes 64 Time taken = 2083610424
+Particles 4096 Processes 8 Time taken = 52143259642
+Particles 4096 Processes 16 Time taken = 25652391911
+Particles 4096 Processes 32 Time taken = 15461764105
+Particles 4096 Processes 64 Time taken = 7976563043
+Particles 8192 Processes 8 Time taken = 216870407714
+Particles 8192 Processes 16 Time taken = 105681109026
+Particles 8192 Processes 32 Time taken = 56453841875
+Particles 8192 Processes 64 Time taken = 29199145590
+
+
