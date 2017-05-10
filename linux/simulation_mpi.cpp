@@ -46,9 +46,10 @@ struct Node{
 	int particleIndex;
 	float mass;
       double com[DIM];  
+      int indicesArraySize = 32; //Can modify as needed for performance
       //Run out of memory if save.
       //double boundaries[8][6];
-      //double std::vector indicesArray[8];
+      //std::vector<int> indicesArray[8];
 };
 
 class Tree{
@@ -112,9 +113,9 @@ class Tree{
                   memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
 
                   int index;
-                  double com0 = 0;
-                  double com1 = 0;
-                  double com2 = 0;
+                  double com0 = 0.0;
+                  double com1 = 0.0;
+                  double com2 = 0.0;
              
                   #pragma omp parallel for reduction(+:com0, com1, com2) private(index)
 			for(int i = 0; i < partIndices.size(); i++)
@@ -122,7 +123,7 @@ class Tree{
                         index = partIndices[i];
                         com0 += position[index][0];
                         com1 += position[index][1];
-                        //Same as com1 if DIM == 2
+                        //Same as com1 if DIM == 2, messes up vectorization for two dimensions
                         com2 += position[index][DIM - 1];
 			}
 
@@ -145,7 +146,13 @@ class Tree{
 							      {halfX,boundaries[1],halfY,boundaries[3],boundaries[4],halfZ},
                                                 {halfX,boundaries[1],halfY,boundaries[3],halfZ,boundaries[5]}};  
 
-			std::vector<int> indicesArray[8];               
+                  std::vector<int> indicesArray[8];
+                  //Take care of resizing all at once, based on previous resized values
+                  //Need to do some tests to see if this works
+                  for(int i = 0; i < 8; i++)
+                  {
+                        indicesArray[i].reserve(nodesArray[nodeIndex].indicesArraySize);
+                  }               
 
 			//Subdivide the indices based on boundaries
                   char octant;
@@ -156,21 +163,31 @@ class Tree{
                         if(position[partIndices[i]][1] > halfY) octant |= 2;
                         if(position[partIndices[i]][2] > halfZ) octant |= 1;
                         indicesArray[octant].push_back(partIndices[i]);
-			}			
+			}
+                  
+                  //Update vector size prediction
+                  for(int i = 0; i < 8; i++)
+                  {                  
+                        if(indicesArray[i].size() > nodesArray[nodeIndex].indicesArraySize)
+                        {
+                              //printf("%d\n", nodesArray[nodeIndex].indicesArraySize);
+                              nodesArray[nodeIndex].indicesArraySize = indicesArray[i].size() + 10;
+                        }
+                  }                  			
 									
 			//Build tree based on subdivisions //Can generalize to handle any power of 8 based on size and nodeIndex
                   //Could generalize to handle any 1, 2, 4, 8! Maybe more if subdivide at lower levels
                   if(nodeIndex == 0) //&& size >= 8 //Spin off new threads at first level
                   {
                         int index = rank % 8;
-                        buildTree(index + 1, position, indicesArray[index], boundaryArray[index], rank);                                       
+                        buildTree(index + 1, position, indicesArray[index], boundaryArray[index], rank);                                     
                   }
                   //Potential case for 64 processes.
                   //else if(nodeIndex > 0 && nodeIndex <= 9 && size >= 64)
                   //{}
                   else //Build 
                   { 
-                        //Omp task is not thread save because the tree is resized
+                        //Omp task is not thread safe because the tree is resized
                         for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                         {
                               buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
@@ -211,7 +228,7 @@ class Tree{
                         for(int k = 0; k < DIM; k++)
                               acceleration[k] += vectors[k]*forceCoeff;
 
-                        potentialEnergy += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
+                        potentialEnergy += 2.0 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
                   }
                   else //Check children
                   {
