@@ -21,8 +21,7 @@
 
 //#define BARNES_HUT //Barnes Hut or strips?
 #define CUTOFF //If strips, use cutoff distance or not?
-#define HYBRID //Use OpenMP?
-//#define OUTPUT //print output?
+#define OUTPUT //print output?
 
 #define PARTICLES 1024
 
@@ -447,24 +446,30 @@ int main(int argc, char* argv[])
 void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
       int myStart, int myEnd, double particlesType1, double &potentialEnergy, double boundaries[6])
 {
+      //Could use non-blocking here but there isn't a whole lot of work to do
+      //before this information is needed.
+      int localParticles = myEnd - myStart;
+      MPI_Request request;
+	MPI_Iallgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
+		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD, &request);
+
+	//MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
+	//	DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
+
 	double sigma, sigmaPow6, sigmaPow12;
 	double pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6;
 	double vectors[DIM], forceCoeff;
       int j, k;
 	
-      //If not hybrid then set this all at once
-      #ifndef HYBRID
       memset(&acceleration[myStart], 0, DIM*(myEnd - myStart)*sizeof(double));
-      #endif	
-
       double pe = 0;
+
+      MPI_Wait(&request, MPI_STATUS_IGNORE);
+
       #pragma omp parallel for reduction(+:pe) private(j, k, sigma, sigmaPow6, sigmaPow12, \
       pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6, vectors, forceCoeff)
 	for (int i = myStart; i < myEnd; i++)
 	{
-            #ifdef HYBRID
-            memset(&acceleration[i][0], 0, DIM*sizeof(double));
-            #endif
 		for (j = 0; j < i; j++)
 		{
                   pythagorean = 0;
@@ -546,23 +551,25 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM],
      int rank, double particlesType1,
      double &potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices)
 {                             
-      //Figure out how to hybridize
+      MPI_Request request;
+	MPI_Iallgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
+		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD, &request);
+
+	//MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
+	//	DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
      
       //Set acceleration of cluster particles to zero, this is legal 
       //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
-      #ifndef HYBRID
       memset(&acceleration[clusterStart], 0, DIM*(clusterEnd - clusterStart)*sizeof(double));
-      #endif
+      double pe = 0;
+
+      MPI_Wait(&request, MPI_STATUS_IGNORE);
 
       tree->buildTree(0, position, indices, boundaries, rank);
 
-      double pe = 0;
       #pragma omp parallel for reduction(+:pe)
       for(int i = clusterStart; i < clusterEnd; i++)
       {
-            #ifdef HYBRID
-            memset(&acceleration[i][0], 0, DIM*sizeof(double)); 
-            #endif
             tree->calcAcc(rank % 8 + 1, i, position, acceleration[i], pe);
       }
       potentialEnergy = pe;
@@ -590,10 +597,6 @@ void performEulerOperation(int myStart, int myEnd,
                   //applyPeriodicBoundary(position[i][j], oldPosition[i][j], boundaries[2*j]);
 		}
 	}
-
-      int localParticles = myEnd - myStart;
-	MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
-	      DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 }
 
 void performVerletOperation(int totalParticles, int myStart, int myEnd, 
@@ -602,8 +605,7 @@ void performVerletOperation(int totalParticles, int myStart, int myEnd,
 	double boundaries[6], double (*oldPosition)[DIM], double (*acceleration)[DIM],
 	double timestep, Tree *tree, std::vector<int> &indices, double &potentialEnergy)
 {
-	double currentPosition;
-	double futureDisplacement;
+	double currentPosition, futureDisplacement;
       double dtsq = timestep*timestep;
 	int j;
       int accStart = clusterStart - myStart;
@@ -635,11 +637,6 @@ void performVerletOperation(int totalParticles, int myStart, int myEnd,
                   //applyPeriodicBoundary(position[i][j], oldPosition[i][j], boundaries[2*j]);
 		}
 	}
-
-      //Could use non-blocking here but there isn't a whole lot of work to do
-      //before this information is needed.
-	MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
-		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 }
 
 double calcKineticEnergy(int myStart, int myEnd, double (*position)[DIM], double (*oldPosition)[DIM],
