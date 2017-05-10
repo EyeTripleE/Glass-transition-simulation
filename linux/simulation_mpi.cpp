@@ -19,7 +19,7 @@
 #define EMPTY_LEAF -1
 #define BRANCH -2
 
-//#define BARNES_HUT //Barnes Hut or strips?
+#define BARNES_HUT //Barnes Hut or strips?
 #define CUTOFF //If strips, use cutoff distance or not?
 #define OUTPUT //print output?
 
@@ -44,7 +44,7 @@ inline double determineVectorFlat(const double p1Pos, const double p2Pos)
 
 struct Node{
 	int particleIndex;
-	double mass;
+	float mass;
       double com[DIM];  
       //Run out of memory if save.
       //double boundaries[8][6];
@@ -98,7 +98,7 @@ class Tree{
 		{
 			nodesArray[nodeIndex].particleIndex = partIndices[0];
 			//Assume equivalent mass, otherwise will need to modify
-			nodesArray[nodeIndex].mass = 1.0;
+			nodesArray[nodeIndex].mass = 1.0f;
                   memcpy(&(nodesArray[nodeIndex].com[0]), &position[partIndices[0]][0], DIM*sizeof(double));	
 		}
 		else
@@ -185,16 +185,16 @@ class Tree{
             if(nodesArray[nodeIndex].particleIndex != EMPTY_LEAF && nodesArray[nodeIndex].particleIndex != partIndex)
             {
                   double vectors[DIM];
-                  double pythagorean = 0;
+                  double pythagorean = 0.0f;
                   for(int i = 0; i < DIM; i++)
                   {
                         vectors[i] = determineVectorFlat(position[partIndex][i], nodesArray[nodeIndex].com[i]);
                         pythagorean += vectors[i]*vectors[i];
                   }
 
-                  double s = nodesArray[nodeIndex].mass/sqrt(pythagorean);
+                  float s = nodesArray[nodeIndex].mass/sqrt((float)pythagorean);
 
-                  if(nodesArray[nodeIndex].particleIndex >= 0 || s < 0.5) //Calculate force
+                  if(nodesArray[nodeIndex].particleIndex >= 0 || s < 0.5f) //Calculate force
                   {
 		            //Force derived from Lennard-Jones potential
                         //Guessing this should be an average of sigma values of all involved particles. Since only using type 1 just set to one here.     
@@ -446,15 +446,10 @@ int main(int argc, char* argv[])
 void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
       int myStart, int myEnd, double particlesType1, double &potentialEnergy, double boundaries[6])
 {
-      //Could use non-blocking here but there isn't a whole lot of work to do
-      //before this information is needed.
       int localParticles = myEnd - myStart;
       MPI_Request request;
 	MPI_Iallgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
 		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD, &request);
-
-	//MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
-	//	DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 
 	double sigma, sigmaPow6, sigmaPow12;
 	double pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6;
