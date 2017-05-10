@@ -222,14 +222,14 @@ int main()
 
 	//Deleting arrays	
 
-	delete positionX;
-	delete positionY;
-	delete velocityX;
-	delete velocityY;
-	delete accelerationX;
-	delete accelerationY;
-	delete oldPositionX;
-	delete oldPositionY;
+	delete[] positionX;
+	delete[] positionY;
+	delete[] velocityX;
+	delete[] velocityY;
+	delete[] accelerationX;
+	delete[] accelerationY;
+	delete[] oldPositionX;
+	delete[] oldPositionY;
 	cout << (double)(clock() - tstart) / CLOCKS_PER_SEC << endl;
 	for (int i = 0; i < totalParticles; i++)
 	{
@@ -647,7 +647,7 @@ void createHistogram(double binSize, int totalParticles, int particlesType1,
 	}
 	histoFile.close();
 
-	delete type1and1Histogram;
-	delete type2and1Histogram;
-	delete type2and2Histogram;
+	delete[] type1and1Histogram;
+	delete[] type2and1Histogram;
+	delete[] type2and2Histogram;
 }
