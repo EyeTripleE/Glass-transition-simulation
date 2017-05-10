@@ -162,6 +162,7 @@ class Tree{
                         octant = position[partIndices[i]][0] > halfX ? 4 : 0; 
                         if(position[partIndices[i]][1] > halfY) octant |= 2;
                         if(position[partIndices[i]][2] > halfZ) octant |= 1;
+                        #pragma omp critical
                         indicesArray[octant].push_back(partIndices[i]);
 			}
                   
@@ -566,9 +567,6 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM],
       MPI_Request request;
 	MPI_Iallgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
 		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD, &request);
-
-	//MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
-	//	DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
      
       //Set acceleration of cluster particles to zero, this is legal 
       //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
