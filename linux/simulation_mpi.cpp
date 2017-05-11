@@ -19,11 +19,9 @@
 #define EMPTY_LEAF -1
 #define BRANCH -2
 
-#define BARNES_HUT //Barnes Hut or strips?
+//#define BARNES_HUT //Barnes Hut or strips?
 #define CUTOFF //If strips, use cutoff distance or not?
 #define OUTPUT //print output?
-
-#define PARTICLES 1024
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
@@ -249,11 +247,11 @@ class Tree{
 //Cutoff distance of 4.0 units. 
 //Then calculates the acceleration of each particle based on the force
 //currently applied to it.
-void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles,  
+void calcAccelerationStrips(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles,  
       int myStart, int myEnd,	double particlesType1, double &potentialEnergy, double boundaries[6]);
 
 //Barnes-Hut version
-void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM],
+void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int localParticles, int clusterStart, int clusterEnd,
      int rank, double particlesType1,
      double &potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices);
@@ -335,8 +333,9 @@ int main(int argc, char* argv[])
 	double currentTime = 0;
 
       //Set variables for number of particles
-      int numParticlesType1 = PARTICLES;
-	//int numParticlesType1 = 1024;
+      int numParticlesType1 = 1024;
+      if (argc > 1)
+	      numParticlesType1 = atoi(argv[1]);
 	int numParticlesType2 = 0;
 	int totalParticles = numParticlesType1 + numParticlesType2;
 
@@ -461,7 +460,7 @@ int main(int argc, char* argv[])
 //End of main function
 
 //O(n^2) force calculation
-void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
+void calcAccelerationStrips(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
       int myStart, int myEnd, double particlesType1, double &potentialEnergy, double boundaries[6])
 {
       int localParticles = myEnd - myStart;
@@ -559,7 +558,13 @@ void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM], doub
       //            acceleration[i][j] *= 0.5;
 }
 
-void calcAcceleration(double (*acceleration)[DIM], double (*position)[DIM],
+/*void calcAccelerationTiles()
+{
+      //Request from my co
+}
+*/
+
+void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int localParticles, int clusterStart, int clusterEnd,
      int rank, double particlesType1,
      double &potentialEnergy, double boundaries[6], Tree *tree, std::vector<int> &indices)
@@ -622,10 +627,10 @@ void performVerletOperation(int totalParticles, int myStart, int myEnd,
       int localParticles = myEnd - myStart;
 
       #ifdef BARNES_HUT
-	calcAcceleration(acceleration, position, localParticles,
+	calcAccelerationBH(acceleration, position, localParticles,
           clusterStart, clusterEnd, rank, particlesType1, potentialEnergy, boundaries, tree, indices);
       #else
-      calcAcceleration(acceleration, position, totalParticles, myStart, myEnd, particlesType1, potentialEnergy, boundaries);
+      calcAccelerationStrips(acceleration, position, totalParticles, myStart, myEnd, particlesType1, potentialEnergy, boundaries);
       #endif
   
       #pragma omp parallel for private(j, currentPosition, futureDisplacement)
