@@ -16,15 +16,17 @@
 #include "mpi.h"
 #include <omp.h>
 #include <chrono>
+#include "assert.h"
 
 #define DIM 3
 #define EMPTY_LEAF -1
 #define BRANCH -2
 
-#define BARNES_HUT //Barnes Hut or strips?
+//#define BARNES_HUT //Barnes Hut, tiles, or strips?
+#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
 #define OUTPUT //print output?
-//#define TILES
+
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
@@ -236,6 +238,11 @@ class Tree{
 void calcAccelerationStrips(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles,  
       int myStart, int myEnd, int particlesType1, double &potentialEnergy, double boundaries[6]);
 
+//Tiled version
+void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM], 
+      int myStart, int myEnd, int rowStart, int rowEnd, int columnStart, int columnEnd,
+      int targetRank, int coord[2], int particlesType1, double &potentialEnergy, double boundaries[6]);
+
 //Barnes-Hut version
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int myStart, int myEnd, int clusterStart, int clusterEnd,
@@ -282,6 +289,11 @@ MPI_Comm COMM_ROW;
 //The main function to execute the simulation
 int main(int argc, char* argv[])
 {
+      #if defined(TILES) && defined(BARNES_HUT)
+      printf("Error: Incompatible precompiler directives\n");      
+      exit(1);
+      #endif
+      
       //Setup MPI
       int rank, size;
 
@@ -290,17 +302,16 @@ int main(int argc, char* argv[])
       MPI_Comm_size(MPI_COMM_WORLD, &size);
       MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-      #ifdef BARNES_HUT
+      #if defined(BARNES_HUT)
       if(size % 8 != 0)
       {            
             printf("Error: Number of processes is not a multiple of 8\n");
             MPI_Abort(MPI_COMM_WORLD, 1);
       }
-      #endif
-      #ifdef TILES
-      if(size != 1 || size != 2 || size != 4 || size != 16 || size != 64)
+      #elif defined(TILES)
+      if(!(size == 1 || size == 2 || size == 4 || size == 16 || size == 64))
       {
-            prinf("Error: Number of processes is not a (small) factor of 1024\n")
+            printf("Error: Number of processes is not a (small) factor of 1024\n");
             MPI_Abort(MPI_COMM_WORLD, 1);
       }
       #endif
@@ -350,7 +361,8 @@ int main(int argc, char* argv[])
       
       #ifdef TILES
       int reorder = 0;
-      int dim[2], coord[2];
+      int coord[2];
+      int dim[2] = {0, 0};
       int period[2] = {0, 0};
 
       MPI_Dims_create(size, 2, dim);
@@ -360,9 +372,19 @@ int main(int argc, char* argv[])
       MPI_Cart_create(MPI_COMM_WORLD, 2, dim, period, reorder, &comm_cart);
       MPI_Cart_coords(comm_cart, rank, 2, coord);
 
+      int groupParticles = totalParticles / dim[0];
+      int rowStart = coord[0]*groupParticles; 
+      int rowEnd = (coord[0] + 1)*groupParticles;
+      int columnStart = coord[1]*groupParticles;
+      int columnEnd = (coord[1] + 1)*groupParticles;
+
+      int target2D[2] = {coord[1], coord[0]};
+      int targetRank;
+      MPI_Cart_rank(comm_cart, target2D, &targetRank);
+
       // dim[0] is x and dim[1] is y
       MPI_Comm_split(MPI_COMM_WORLD, coord[0], rank, &COMM_ROW);
-      MPI_Comm_split(MPI_COMM_WORLD, coord[1], rank, &COMM_COL);
+      MPI_Comm_split(MPI_COMM_WORLD, coord[1], rank, &COMM_COLUMN);
       #endif
 
       //Set energy variables
@@ -411,8 +433,10 @@ int main(int argc, char* argv[])
       for(int i = 0; i < totalParticles; i++)
             indices[i] = i;  
 
-      #ifdef BARNES_HUT
+      #if defined(BARNES_HUT)
       int accDisp = clusterStart - myStart;
+      #elif defined(TILES)
+      int accDisp = rowStart - myStart;
       #else
       int accDisp = 0; 
       #endif   
@@ -432,11 +456,12 @@ int main(int argc, char* argv[])
             #if defined(BARNES_HUT)
 	      calcAccelerationBH(acceleration, position, myStart, myEnd,
                 clusterStart, clusterEnd, rank, numParticlesType1, energies[1], boundaries, tree, indices);
-            //#elif defined(TILES)
-            //calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, 
-            //      columnStart, columnEnd, numParticlesType1, energies[1], boundaries);
+            #elif defined(TILES)
+            calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, 
+                  columnStart, columnEnd, targetRank, coord, numParticlesType1, energies[1], boundaries);
             #else
-            calcAccelerationStrips(acceleration, position, totalParticles, myStart, myEnd, numParticlesType1, energies[1], boundaries);
+            calcAccelerationStrips(acceleration, position, totalParticles, myStart, myEnd,
+                   numParticlesType1, energies[1], boundaries);
             #endif
 
             performVerletOperation(myStart, myEnd, accDisp, position, oldPosition, acceleration, boundaries, dtsq);
@@ -583,41 +608,60 @@ void calcAccelerationStrips(double (*acceleration)[DIM], double (*position)[DIM]
       //            acceleration[i][j] *= 0.5;
 }
 
-/*
+
 void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM], 
       int myStart, int myEnd, int rowStart, int rowEnd, int columnStart, int columnEnd,
-      int particlesType1, double &potentialEnergy, double boundaries[6])
+      int targetRank, int coord[2], int particlesType1, double &potentialEnergy, double boundaries[6])
 {
-      int localParticles = rowEnd - rowStart;
-      MPI_Request requests[2];
+      int localParticles = myEnd - myStart;
+      int groupParticles = rowEnd - rowStart;
+      MPI_Request requests[2];      
 
       //Currently gather from all, fix this
-	MPI_Iallgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
-		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD, &requests[0]);
+	//MPI_Iallgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
+	//	DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD, &requests[0]);
 
-      //Gather from processes in row and in column
-//      MPI_Iallgather(<send target>, DIM*localParticles, MPI_Double, <recv target>, 
-//            DIM*localParticles, MPI_DOUBLE, COMM_ROW, &requests[0]);
+	MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
+		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
 
-//      MPI_Iallgather(<send target>, DIM*localParticles, MPI_Double, <recv target>, 
-//            DIM*localParticles, MPI_DOUBLE, COMM_COLUMN, &requests[1]);    
+      //Gather along the rows
+	//MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, &position[rowStart],
+	//	DIM*localParticles, MPI_DOUBLE, COMM_ROW);
 
-      //Need to obtain data from 
-      //1 from 1, 2, 3 and 1, 2, 3
-      //2 from 1, 2, 3 and 4, 5, 6
-      //3 from 1, 2, 3 and 7, 8, 9      
-      //4 from 4, 5, 6 and 1, 2, 3
+      //Point to point communication, it's a transpose! 
+      /*
+      if(coord[0] != coord[1])
+      {
+            MPI_Irecv(&position[columnStart], DIM*groupParticles, MPI_DOUBLE,
+                  MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &requests[0]);
+
+            //MPI_Sendrecv?
+            MPI_Isend(&position[rowStart], DIM*groupParticles, MPI_DOUBLE, 
+                  targetRank, 0, MPI_COMM_WORLD, &requests[1]);
+
+                      
+            //MPI_Sendrecv(&position[rowStart], DIM*groupParticles, MPI_DOUBLE, 
+            //      targetRank, 0, &position[columnStart],
+            //      DIM*groupParticles, MPI_DOUBLE, MPI_ANY_SOURCE, MPI_ANY_TAG,
+            //      MPI_COMM_WORLD, MPI_STATUS_IGNORE);            
+      }
+      */
 
 	double sigma, sigmaPow6, sigmaPow12;
 	double pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6;
 	double vectors[DIM], forceCoeff;
       int j, k;
 	
-      memset(&acceleration[myStart], 0, DIM*(rowEnd - rowStart)*sizeof(double));
-      double pe = 0;     
+      memset(&acceleration[rowStart], 0, DIM*groupParticles*sizeof(double));
+      double pe = 0.0;     
 
-      MPI_Waitall(1, &request, MPI_STATUSES_IGNORE); 
-      //MPI_Waitall(2, &request, MPI_STATUSES_IGNORE); 
+      
+      //if(coord[0] != coord[1])
+      //{
+            //Don't need to wait for the send to finish
+        //    MPI_Wait(&requests[0], MPI_STATUS_IGNORE);
+      //}
+      
 
       //Calculate force
       #pragma omp parallel for reduction(+:pe) private(j, k, sigma, sigmaPow6, sigmaPow12, \
@@ -690,12 +734,13 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
                         pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
 			}
 		}
+      }
+      potentialEnergy = pe;
 
-      //Reduce and scatter, send to other processors in same row      
+      //Reduce and scatter, send to other processors in same row     
       MPI_Reduce_scatter_block(MPI_IN_PLACE, &acceleration[rowStart], 
             DIM*localParticles, MPI_DOUBLE, MPI_SUM, COMM_ROW);  
 }
-*/
 
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int myStart, int myEnd, int clusterStart, int clusterEnd,
