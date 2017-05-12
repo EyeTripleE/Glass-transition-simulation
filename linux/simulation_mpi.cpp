@@ -318,7 +318,6 @@ int main(int argc, char* argv[])
 
       //START SETUP
 	//clock_t tstart = clock();
-	auto start_time = std::chrono::high_resolution_clock::now();
 	/*CONSTANTS FOR REFERENCE THESE ARE HARDCODED*/
 	//constants 0.5(sigma1 + sigma2)
 	//double sigma1to1 = 1; //in units of sigma
@@ -327,14 +326,6 @@ int main(int argc, char* argv[])
 	//double epsilon = 1;// in units of epsilon
 	//double massParticle1 = 1; //in units of massParticle1
 	//double massParticle2 = 2; //in units of massParticle1
-
-
-      //Set time related variables
-	double timestep = 0.005; //Can be arbitrarily small
-	double maxTime = 10; //Can be arbitrarily long or short
-	double invTimestep = 1.0/timestep; //needed for KE
-      double dtsq = timestep*timestep;
-	double currentTime = 0;
 
       //Set variables for number of particles
       int numParticlesType1 = 1024;
@@ -348,18 +339,17 @@ int main(int argc, char* argv[])
 	int myStart = rank*localParticles;
 	int myEnd = (rank + 1)*localParticles;
 
-      #ifdef BARNES_HUT
+      #if defined(BARNES_HUT)
+
       int numClusters = std::max(1, size/8);
       int clusterID = rank/8;
       int clusterParticles = totalParticles / numClusters;     
       int clusterStart = clusterParticles*clusterID;
       int clusterEnd = clusterParticles*(clusterID + 1);
-
-      //For Barnes Hut
       MPI_Comm_split(MPI_COMM_WORLD, clusterID, rank, &COMM_CLUSTER);
-      #endif
-      
-      #ifdef TILES
+
+      #elif defined(TILES)
+
       int reorder = 0;
       int coord[2];
       int dim[2] = {0, 0};
@@ -385,7 +375,15 @@ int main(int argc, char* argv[])
       // dim[0] is x and dim[1] is y
       MPI_Comm_split(MPI_COMM_WORLD, coord[0], rank, &COMM_ROW);
       MPI_Comm_split(MPI_COMM_WORLD, coord[1], rank, &COMM_COLUMN);
+
       #endif
+
+      //Set time related variables
+	double timestep = 0.005; //Can be arbitrarily small
+	double maxTime = 10; //Can be arbitrarily long or short
+	double invTimestep = 1.0/timestep; //needed for KE
+      double dtsq = timestep*timestep;
+	double currentTime = 0;
 
       //Set energy variables
 	double energies[2], totalEnergy; //{kineticEnergy, potentialEnergy}
@@ -444,6 +442,7 @@ int main(int argc, char* argv[])
       //END SETUP
 
       //START SIMULATION
+	auto start_time = std::chrono::high_resolution_clock::now(); //Start the timer
 
 	//Perform initial Euler operation to set things in motion
       performEulerOperation(myStart, myEnd, position, oldPosition, velocity,
@@ -617,19 +616,11 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
       int groupParticles = rowEnd - rowStart;
       MPI_Request requests[2];      
 
-      //Currently gather from all, fix this
-	//MPI_Iallgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
-	//	DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD, &requests[0]);
-
-	MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
-		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD);
-
       //Gather along the rows
-	//MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, &position[rowStart],
-	//	DIM*localParticles, MPI_DOUBLE, COMM_ROW);
+	MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, &position[rowStart],
+		DIM*localParticles, MPI_DOUBLE, COMM_ROW);
 
-      //Point to point communication, it's a transpose! 
-      /*
+      //Point to point communication, it's a transpose!       
       if(coord[0] != coord[1])
       {
             MPI_Irecv(&position[columnStart], DIM*groupParticles, MPI_DOUBLE,
@@ -637,15 +628,8 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 
             //MPI_Sendrecv?
             MPI_Isend(&position[rowStart], DIM*groupParticles, MPI_DOUBLE, 
-                  targetRank, 0, MPI_COMM_WORLD, &requests[1]);
-
-                      
-            //MPI_Sendrecv(&position[rowStart], DIM*groupParticles, MPI_DOUBLE, 
-            //      targetRank, 0, &position[columnStart],
-            //      DIM*groupParticles, MPI_DOUBLE, MPI_ANY_SOURCE, MPI_ANY_TAG,
-            //      MPI_COMM_WORLD, MPI_STATUS_IGNORE);            
-      }
-      */
+                  targetRank, 0, MPI_COMM_WORLD, &requests[1]);      
+      }      
 
 	double sigma, sigmaPow6, sigmaPow12;
 	double pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6;
@@ -656,84 +640,131 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
       double pe = 0.0;     
 
       
-      //if(coord[0] != coord[1])
-      //{
+      if(coord[0] != coord[1])
+      {
             //Don't need to wait for the send to finish
-        //    MPI_Wait(&requests[0], MPI_STATUS_IGNORE);
-      //}
+            MPI_Wait(&requests[0], MPI_STATUS_IGNORE);
+      }
       
 
       //Calculate force
-      #pragma omp parallel for reduction(+:pe) private(j, k, sigma, sigmaPow6, sigmaPow12, \
-      pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6, vectors, forceCoeff)
-	for (int i = rowStart; i < rowEnd; i++)
-	{
-		for (j = columnStart; j < i; j++)
-		{
-                  pythagorean = 0;
-                  for(k = 0; k < DIM; k++)
-                  {
-                        vectors[k] = determineVectorFlat(position[i][k], position[j][k]);
-                        //vectors[k] = determineVectorPeriodic(position[i][k], position[j][k], boundaries[2*k + 1]);
-                        pythagorean += vectors[k]*vectors[k];
-                  }
-
-                  #ifdef CUTOFF
-			if (pythagorean < 16.0)
-                  #endif
-			{
-				//Force derived from Lennard-Jones potential
-				sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);				
-				sigmaPow6 = sigma*sigma;//Use sigmaPow6 to hold the square temporarily
-				sigmaPow6 = sigmaPow6*sigmaPow6*sigmaPow6;
-				sigmaPow12 = sigmaPow6*sigmaPow6;
-				invPy = 1.0 / pythagorean;
-				invPyPow3 = invPy*invPy*invPy;
-				invPyPow4 = invPyPow3*invPy;
-				invPyPow6 = invPyPow3*invPyPow3;
-				forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);				
-
+      if(coord[0] == coord[1])
+      {
+            #pragma omp parallel for reduction(+:pe) private(j, k, sigma, sigmaPow6, sigmaPow12, \
+            pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6, vectors, forceCoeff)
+	      for (int i = rowStart; i < rowEnd; i++)
+	      {
+		      for (j = columnStart; j < i; j++)
+		      {
+                        pythagorean = 0;
                         for(k = 0; k < DIM; k++)
                         {
-                              acceleration[i][k] += vectors[k]*forceCoeff;
+                              vectors[k] = determineVectorFlat(position[i][k], position[j][k]);
+                              //vectors[k] = determineVectorPeriodic(position[i][k], position[j][k], boundaries[2*k + 1]);
+                              pythagorean += vectors[k]*vectors[k];
                         }
 
-                        pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
-			}
-		}
-		for (j = i + 1; j < columnEnd; j++)
-		{
-                  pythagorean = 0;
-                  for(k = 0; k < DIM; k++)
-                  {
-                        vectors[k] = determineVectorFlat(position[i][k], position[j][k]);
-                        //vectors[k] = determineVectorPeriodic(position[i][k], position[j][k], boundaries[2*k + 1]);
-                        pythagorean += vectors[k]*vectors[k];
-                  }
+                        #ifdef CUTOFF
+			      if (pythagorean < 16.0)
+                        #endif
+			      {
+				      //Force derived from Lennard-Jones potential
+				      sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);				
+				      sigmaPow6 = sigma*sigma;//Use sigmaPow6 to hold the square temporarily
+				      sigmaPow6 = sigmaPow6*sigmaPow6*sigmaPow6;
+				      sigmaPow12 = sigmaPow6*sigmaPow6;
+				      invPy = 1.0 / pythagorean;
+				      invPyPow3 = invPy*invPy*invPy;
+				      invPyPow4 = invPyPow3*invPy;
+				      invPyPow6 = invPyPow3*invPyPow3;
+				      forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);				
 
-                  #ifdef CUTOFF
-			if (pythagorean < 16.0)
-                  #endif
-			{
-				//Force derived from Lennard-Jones potential
-				sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);				
-				sigmaPow6 = sigma*sigma;//Use sigmaPow6 to hold the square temporarily
-				sigmaPow6 = sigmaPow6*sigmaPow6*sigmaPow6;
-				sigmaPow12 = sigmaPow6*sigmaPow6;
-				invPy = 1.0 / pythagorean;
-				invPyPow3 = invPy*invPy*invPy;
-				invPyPow4 = invPyPow3*invPy;
-				invPyPow6 = invPyPow3*invPyPow3;
-				forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);				
+                              for(k = 0; k < DIM; k++)
+                              {
+                                    acceleration[i][k] += vectors[k]*forceCoeff;
+                              }
 
+                              pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
+			      }
+		      }
+		      for (j = i + 1; j < columnEnd; j++)
+		      {
+                        pythagorean = 0;
                         for(k = 0; k < DIM; k++)
                         {
-                              acceleration[i][k] += vectors[k]*forceCoeff;
+                              vectors[k] = determineVectorFlat(position[i][k], position[j][k]);
+                              //vectors[k] = determineVectorPeriodic(position[i][k], position[j][k], boundaries[2*k + 1]);
+                              pythagorean += vectors[k]*vectors[k];
                         }
 
-                        pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
-			}
-		}
+                        #ifdef CUTOFF
+			      if (pythagorean < 16.0)
+                        #endif
+			      {
+				      //Force derived from Lennard-Jones potential
+				      sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : 
+                              //((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);				
+				      sigmaPow6 = sigma*sigma;//Use sigmaPow6 to hold the square temporarily
+				      sigmaPow6 = sigmaPow6*sigmaPow6*sigmaPow6;
+				      sigmaPow12 = sigmaPow6*sigmaPow6;
+				      invPy = 1.0 / pythagorean;
+				      invPyPow3 = invPy*invPy*invPy;
+				      invPyPow4 = invPyPow3*invPy;
+				      invPyPow6 = invPyPow3*invPyPow3;
+				      forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);				
+
+                              for(k = 0; k < DIM; k++)
+                              {
+                                    acceleration[i][k] += vectors[k]*forceCoeff;
+                              }
+
+                              pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
+			      }
+		      }
+            }
+      }
+      else
+      {
+            #pragma omp parallel for reduction(+:pe) private(j, k, sigma, sigmaPow6, sigmaPow12, \
+            pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6, vectors, forceCoeff)
+	      for (int i = rowStart; i < rowEnd; i++)
+	      {
+		      for (j = columnStart; j < columnEnd; j++)
+		      {
+                        pythagorean = 0;
+                        for(k = 0; k < DIM; k++)
+                        {
+                              vectors[k] = determineVectorFlat(position[i][k], position[j][k]);
+                              //vectors[k] = determineVectorPeriodic(position[i][k], position[j][k], boundaries[2*k + 1]);
+                              pythagorean += vectors[k]*vectors[k];
+                        }
+
+                        #ifdef CUTOFF
+			      if (pythagorean < 16.0)
+                        #endif
+			      {
+				      //Force derived from Lennard-Jones potential
+
+				      sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 :
+                              // ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);				
+				      sigmaPow6 = sigma*sigma;//Use sigmaPow6 to hold the square temporarily
+				      sigmaPow6 = sigmaPow6*sigmaPow6*sigmaPow6;
+				      sigmaPow12 = sigmaPow6*sigmaPow6;
+				      invPy = 1.0 / pythagorean;
+				      invPyPow3 = invPy*invPy*invPy;
+				      invPyPow4 = invPyPow3*invPy;
+				      invPyPow6 = invPyPow3*invPyPow3;
+				      forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);				
+
+                              for(k = 0; k < DIM; k++)
+                              {
+                                    acceleration[i][k] += vectors[k]*forceCoeff;
+                              }
+
+                              pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
+			      }
+		      }
+            }
       }
       potentialEnergy = pe;
 
