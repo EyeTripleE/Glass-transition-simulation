@@ -22,8 +22,8 @@
 #define EMPTY_LEAF -1
 #define BRANCH -2
 
-//#define BARNES_HUT //Barnes Hut, tiles, or strips?
-#define TILES
+#define BARNES_HUT //Barnes Hut, tiles, or strips?
+//#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
 #define OUTPUT //print output?
 
@@ -780,8 +780,8 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
 {                
       int localSize = DIM*(myEnd - myStart);             
       MPI_Request request;
-	MPI_Iallgather(MPI_IN_PLACE, DIM*localSize, MPI_DOUBLE, position,
-		DIM*localSize, MPI_DOUBLE, MPI_COMM_WORLD, &request);
+	MPI_Iallgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, position,
+		localSize, MPI_DOUBLE, MPI_COMM_WORLD, &request);
      
       //Set acceleration of cluster particles to zero, this is legal 
       //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
