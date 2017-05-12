@@ -512,17 +512,17 @@ int main(int argc, char* argv[])
 void calcAccelerationStrips(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
       int myStart, int myEnd, int particlesType1, double &potentialEnergy, double boundaries[6])
 {
-      int localParticles = myEnd - myStart;
+      int localSize = DIM*(myEnd - myStart);
       MPI_Request request;
-	MPI_Iallgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
-		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD, &request);
+	MPI_Iallgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, position,
+		localSize, MPI_DOUBLE, MPI_COMM_WORLD, &request);
 
 	double sigma, sigmaPow6, sigmaPow12;
 	double pythagorean, invPy, invPyPow3, invPyPow4, invPyPow6;
 	double vectors[DIM], forceCoeff;
       int j, k;
 	
-      memset(&acceleration[myStart], 0, DIM*(myEnd - myStart)*sizeof(double));
+      memset(&acceleration[myStart], 0, localSize*sizeof(double));
       double pe = 0;
 
       MPI_Wait(&request, MPI_STATUS_IGNORE);
@@ -612,22 +612,22 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
       int myStart, int myEnd, int rowStart, int rowEnd, int columnStart, int columnEnd,
       int targetRank, int coord[2], int particlesType1, double &potentialEnergy, double boundaries[6])
 {
-      int localParticles = myEnd - myStart;
-      int groupParticles = rowEnd - rowStart;
+      int localSize = DIM*(myEnd - myStart);
+      int groupSize = DIM*(rowEnd - rowStart);
       MPI_Request requests[2];      
 
       //Gather along the rows
-	MPI_Allgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, &position[rowStart],
-		DIM*localParticles, MPI_DOUBLE, COMM_ROW);
+	MPI_Allgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, &position[rowStart],
+		localSize, MPI_DOUBLE, COMM_ROW);
 
       //Point to point communication, it's a transpose!       
       if(coord[0] != coord[1])
       {
-            MPI_Irecv(&position[columnStart], DIM*groupParticles, MPI_DOUBLE,
+            MPI_Irecv(&position[columnStart], groupSize, MPI_DOUBLE,
                   MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &requests[0]);
 
             //MPI_Sendrecv?
-            MPI_Isend(&position[rowStart], DIM*groupParticles, MPI_DOUBLE, 
+            MPI_Isend(&position[rowStart], groupSize, MPI_DOUBLE, 
                   targetRank, 0, MPI_COMM_WORLD, &requests[1]);      
       }      
 
@@ -636,8 +636,8 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 	double vectors[DIM], forceCoeff;
       int j, k;
 	
-      memset(&acceleration[rowStart], 0, DIM*groupParticles*sizeof(double));
-      double pe = 0.0;     
+      memset(&acceleration[rowStart], 0, groupSize*sizeof(double));
+      double pe = 0.0;  
 
       
       if(coord[0] != coord[1])
@@ -770,7 +770,7 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 
       //Reduce and scatter, send to other processors in same row     
       MPI_Reduce_scatter_block(MPI_IN_PLACE, &acceleration[rowStart], 
-            DIM*localParticles, MPI_DOUBLE, MPI_SUM, COMM_ROW);  
+            localSize, MPI_DOUBLE, MPI_SUM, COMM_ROW);  
 }
 
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
@@ -778,10 +778,10 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int rank, int particlesType1,
      double &potentialEnergy, double boundaries[6], Tree &tree, std::vector<int> &indices)
 {                
-      int localParticles = myEnd - myStart;             
+      int localSize = DIM*(myEnd - myStart);             
       MPI_Request request;
-	MPI_Iallgather(MPI_IN_PLACE, DIM*localParticles, MPI_DOUBLE, position,
-		DIM*localParticles, MPI_DOUBLE, MPI_COMM_WORLD, &request);
+	MPI_Iallgather(MPI_IN_PLACE, DIM*localSize, MPI_DOUBLE, position,
+		DIM*localSize, MPI_DOUBLE, MPI_COMM_WORLD, &request);
      
       //Set acceleration of cluster particles to zero, this is legal 
       //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
@@ -802,7 +802,7 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
       //could use non-blocking here, but there isn't a whole lot of work to do
       //before the information is needed.
       MPI_Reduce_scatter_block(MPI_IN_PLACE, &acceleration[clusterStart], 
-            DIM*localParticles, MPI_DOUBLE, MPI_SUM, COMM_CLUSTER);          
+            localSize, MPI_DOUBLE, MPI_SUM, COMM_CLUSTER);          
 }
 
 //Function that performs the Euler algorithm on all particles in the set
