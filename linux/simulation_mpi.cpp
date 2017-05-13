@@ -112,7 +112,7 @@ class Tree{
 
 			//Assuming mass of one per particle, average location
                   //Zero out center of mass
-                  memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
+                  //memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
 
                   int index;
                   double com0 = 0.0;
@@ -224,23 +224,21 @@ class Tree{
                   memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
 
                   int index;
-                  double com0 = 0.0;
-                  double com1 = 0.0;
-                  double com2 = 0.0;
-             
-			for(int i = 0; i < partIndices.size(); i++)
-			{
-                        index = partIndices[i];
-                        com0 += position[index][0];
-                        com1 += position[index][1];
-                        //Same as com1 if DIM == 2, messes up vectorization for two dimensions
-                        com2 += position[index][DIM - 1];
-			}
+                  int j;
 
+                  for(int i = 0; i < partIndices.size(); i++)
+                  {
+                        index = partIndices[i];
+                        for(j = 0; j < DIM; j++)
+                        {
+                              nodesArray[nodeIndex].com[j] += position[index][j];                              
+                        }                   
+                  }
                   double invSize = 1.0/partIndices.size();
-                  nodesArray[nodeIndex].com[0] = com0*invSize;
-                  nodesArray[nodeIndex].com[1] = com1*invSize;
-                  nodesArray[nodeIndex].com[DIM - 1] = com2*invSize;
+                  for(int i = 0; i < DIM; i++)  
+                  {
+                        nodesArray[nodeIndex].com[i] *= invSize;
+                  }
 			
 			//Create new boundaries
 			double halfX = 0.5*(boundaries[0] + boundaries[1]);
