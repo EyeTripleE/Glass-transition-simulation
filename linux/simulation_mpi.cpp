@@ -175,15 +175,16 @@ class Tree{
                   else //Build 
                   { 
                         //Omp task is not thread safe because the tree is resized, so add omp critical
-                        #pragma omp parallel
-                        #pragma omp single nowait
-                        {
+                        //#pragma omp parallel
+                        //#pragma omp single nowait
+                        //{
+                              #pragma omp parallel for
                               for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                               {    
-                                    #pragma omp task
+                                    //#pragma omp task
                                     buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
                               }
-                        }
+                        //}
                   }          
 		}
 	}
@@ -268,20 +269,24 @@ class Tree{
 			}                			
 									
                   //Omp task is not thread safe because the tree is resized, so add omp critical above
-
+                  //Spinning off tasks breaks on intel compiler, works for gcc.
+                  //Doesn't really matter is maximum number of used cores is 64 because all cores will
+                  //have work if have at least 8 mpi processes.
+                  /*
                   if(partIndices.size() > 10) //Arbitrary cutoff for task creation
                   {
-                        #pragma omp parallel
-                        #pragma omp single nowait
+                        //#pragma omp parallel
+                        //#pragma omp single nowait
                         {
                               for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                               {    
-                                    #pragma omp task
+                                    //#pragma omp task
                                     buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
                               }
-                        }      
+                        }
+ 
                   }
-                  else //Not worth spinning of tasks, do the rest myself
+                  else //Not worth spinning off tasks, do the rest myself*/
                   {                       
                         for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                         {    
