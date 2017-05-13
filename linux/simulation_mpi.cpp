@@ -25,7 +25,7 @@
 #define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
-#define OUTPUT //print output?
+define OUTPUT //print output?
 
 
 //===================================BEGIN FUNCTION HEADERS===================================
@@ -307,7 +307,7 @@ class Tree{
 
                   float s = nodesArray[nodeIndex].mass/sqrt((float)pythagorean);
 
-                  if(nodesArray[nodeIndex].particleIndex >= 0 || s < 0.5f) //Calculate force
+                  if(nodesArray[nodeIndex].particleIndex >= 0 || s < 1.0f) //Calculate force
                   {
 		            //Force derived from Lennard-Jones potential
                         //Guessing this should be an average of sigma values of all involved particles. Since only using type 1 just set to one here.     
