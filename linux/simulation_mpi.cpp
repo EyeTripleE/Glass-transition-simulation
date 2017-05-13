@@ -25,7 +25,7 @@
 #define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
-//#define OUTPUT //print output?
+#define OUTPUT //print output?
 
 
 //===================================BEGIN FUNCTION HEADERS===================================
@@ -49,6 +49,7 @@ struct Node{
 	int particleIndex;
 	float mass;
       double com[DIM];  
+      //double myBoundaries[6];
       //Run out of memory if save.
       //double boundaries[8][6];
       //std::vector<int> indicesArray[8];
@@ -73,7 +74,7 @@ class Tree{
                   {				
                         indices[i] = i;		
                   }
-			buildTree(0, position, indices, boundaries, rank);
+			buildTree(0, position, indices, 127, boundaries, nullptr, rank);
 		};
 
             Tree(std::vector<Node> &vec)
@@ -83,7 +84,8 @@ class Tree{
             }
 
       //Create vector based tree. Can split work among processes at second level.
-	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double *boundaries, int rank)
+	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, char myOctant,
+            double parentBoundaries[6], double parentHalves[3], int rank)
 	{	
             //if(rank == 0) printf("here %d\n", nodeIndex);
             //printf("here %d\n", nodeIndex);
@@ -111,9 +113,6 @@ class Tree{
 			nodesArray[nodeIndex].mass = partIndices.size();
 
 			//Assuming mass of one per particle, average location
-                  //Zero out center of mass
-                  //memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
-
                   int index;
                   double com0 = 0.0;
                   double com1 = 0.0;
@@ -133,41 +132,66 @@ class Tree{
                   nodesArray[nodeIndex].com[0] = com0*invSize;
                   nodesArray[nodeIndex].com[1] = com1*invSize;
                   nodesArray[nodeIndex].com[DIM - 1] = com2*invSize;
-			
-			//Create new boundaries
-			double halfX = 0.5*(boundaries[0] + boundaries[1]);
-			double halfY = 0.5*(boundaries[2] + boundaries[3]);
-			double halfZ = 0.5*(boundaries[4] + boundaries[5]);                
-                  
-                  double boundaryArray[8][6] = {{boundaries[0],halfX,boundaries[2],halfY,boundaries[4],halfZ},//bottom, front, left
-                       				      {boundaries[0],halfX,boundaries[2],halfY,halfZ,boundaries[5]},
-							      {boundaries[0],halfX,halfY,boundaries[3],boundaries[4],halfZ},
-							      {boundaries[0],halfX,halfY,boundaries[3],halfZ,boundaries[5]},
-                                                {halfX,boundaries[1],boundaries[2],halfY,boundaries[4],halfZ},
-							      {halfX,boundaries[1],boundaries[2],halfY,halfZ,boundaries[5]},
-							      {halfX,boundaries[1],halfY,boundaries[3],boundaries[4],halfZ},
-                                                {halfX,boundaries[1],halfY,boundaries[3],halfZ,boundaries[5]}};  
+
+                  double myBoundaries[6];
+
+
+                  //Not generalized currently
+                  if(myOctant >= 8) //I am the root, parentBoundaries stores myBoundaries
+                  {
+                        memcpy(myBoundaries, parentBoundaries, 6*sizeof(double));
+                  }
+                  else //I am not the root, actually calculate
+                  {
+                        //Not generalized currently
+                        int index2;
+                        char andVal = 7;
+                        char ltVal = 4; //less than value
+                        for(int i = 0; i < 3; i++)  
+                        {
+                              index = 2*i;
+                              index2 = index + 1;
+
+                              if((myOctant & andVal) < ltVal)
+                              {
+                                    myBoundaries[index] = parentBoundaries[index];
+                                    myBoundaries[index2] = parentHalves[i];
+                              }                        
+                              else
+                              {
+                                    myBoundaries[index] = parentHalves[i];
+                                    myBoundaries[index2] = parentBoundaries[index2];
+                              }
+
+                              andVal >>= 1;
+                              ltVal >>= 1;
+                        }       
+                  }
+
+                  double myHalves[3] = {0.5*(myBoundaries[0] + myBoundaries[1]),
+                                        0.5*(myBoundaries[2] + myBoundaries[3]), 
+                                        0.5*(myBoundaries[4] + myBoundaries[5])};                  
 
                   std::vector<int> indicesArray[8];            
 
 			//Subdivide the indices based on boundaries
-                  char octant;
-                  //#pragma omp parallel for private(octant) //Seems to be slower with this
+                  //push_back means OpenMP cannot perform well
+                  char childOctant;
 			for(int i = 0; i < partIndices.size(); i++)
 			{
-                        octant = position[partIndices[i]][0] > halfX ? 4 : 0; 
-                        if(position[partIndices[i]][1] > halfY) octant |= 2;
-                        if(position[partIndices[i]][2] > halfZ) octant |= 1;
-                        //#pragma omp critical
-                        indicesArray[octant].push_back(partIndices[i]);
+                        //Breaks with if statement |= 4 for some reason 
+                        childOctant = position[partIndices[i]][0] > myHalves[0] ? 4 : 0;
+                        if(position[partIndices[i]][1] > myHalves[1]) childOctant |= 2;
+                        if(position[partIndices[i]][2] > myHalves[2]) childOctant |= 1;
+                        indicesArray[childOctant].push_back(partIndices[i]);
 			}                			
 									
 			//Build tree based on subdivisions //Can generalize to handle any power of 8 based on size and nodeIndex
                   //Could generalize to handle any 1, 2, 4, 8! Maybe more if subdivide at lower levels
                   if(nodeIndex == 0) //&& size >= 8 //Spin off new threads at first level
                   {
-                        int index = rank % 8;
-                        buildTree(index + 1, position, indicesArray[index], boundaryArray[index], rank);                                     
+                        index = rank % 8;    
+                        buildTree(index + 1, position, indicesArray[index], (char)index, myBoundaries, myHalves, rank);                                   
                   }
                   //Potential case for 64 processes.
                   //else if(nodeIndex > 0 && nodeIndex <= 9 && size >= 64)
@@ -178,18 +202,19 @@ class Tree{
                         //#pragma omp parallel
                         //#pragma omp single nowait
                         //{
-                              #pragma omp parallel for
-                              for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
+                              #pragma omp parallel for //Spin off some openMP threads
+                              for(char i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                               {    
                                     //#pragma omp task
-                                    buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
+                                    buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves, rank);
                               }
                         //}
                   }          
 		}
 	}
 
-	void buildTreeTask(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double *boundaries, int rank)
+	void buildTreeTask(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, char myOctant,
+            double parentBoundaries[6], double parentHalves[3], int rank)
 	{	
             //if(rank == 0) printf("here %d\n", nodeIndex);
             //printf("here %d\n", nodeIndex);
@@ -223,9 +248,9 @@ class Tree{
                   //Zero out center of mass
                   memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
 
+                  //Calculate the center of mass
                   int index;
                   int j;
-
                   for(int i = 0; i < partIndices.size(); i++)
                   {
                         index = partIndices[i];
@@ -241,29 +266,45 @@ class Tree{
                   }
 			
 			//Create new boundaries
-			double halfX = 0.5*(boundaries[0] + boundaries[1]);
-			double halfY = 0.5*(boundaries[2] + boundaries[3]);
-			double halfZ = 0.5*(boundaries[4] + boundaries[5]);                
+                  double myBoundaries[6];
+                  double myHalves[3];            
                   
-                  double boundaryArray[8][6] = {{boundaries[0],halfX,boundaries[2],halfY,boundaries[4],halfZ},//bottom, front, left
-                       				      {boundaries[0],halfX,boundaries[2],halfY,halfZ,boundaries[5]},
-							      {boundaries[0],halfX,halfY,boundaries[3],boundaries[4],halfZ},
-							      {boundaries[0],halfX,halfY,boundaries[3],halfZ,boundaries[5]},
-                                                {halfX,boundaries[1],boundaries[2],halfY,boundaries[4],halfZ},
-							      {halfX,boundaries[1],boundaries[2],halfY,halfZ,boundaries[5]},
-							      {halfX,boundaries[1],halfY,boundaries[3],boundaries[4],halfZ},
-                                                {halfX,boundaries[1],halfY,boundaries[3],halfZ,boundaries[5]}};  
+                  //Not generalized currently
+                  int index2;
+                  char andVal = 7;
+                  char ltVal = 4; //less than value
+                  for(int i = 0; i < 3; i++)  
+                  {
+                        index = 2*i;
+                        index2 = index + 1;
+
+                        if((myOctant & andVal) < ltVal)
+                        {
+                              myBoundaries[index] = parentBoundaries[index];
+                              myBoundaries[index2] = parentHalves[i];
+                        }                        
+                        else
+                        {
+                              myBoundaries[index] = parentHalves[i];
+                              myBoundaries[index2] = parentBoundaries[index2];
+                        }
+                        myHalves[i] = 0.5*(myBoundaries[index] + myBoundaries[index2]);
+                        andVal >>= 1;
+                        ltVal >>= 1;
+                  }                        
 
                   std::vector<int> indicesArray[8];            
 
 			//Subdivide the indices based on boundaries
-                  char octant;
+                  //push_back means OpenMP cannot perform well
+                  char childOctant;
 			for(int i = 0; i < partIndices.size(); i++)
 			{
-                        octant = position[partIndices[i]][0] > halfX ? 4 : 0; 
-                        if(position[partIndices[i]][1] > halfY) octant |= 2;
-                        if(position[partIndices[i]][2] > halfZ) octant |= 1;
-                        indicesArray[octant].push_back(partIndices[i]);
+                        //Breaks with if statement for some reason
+                        childOctant = position[partIndices[i]][0] > myHalves[0] ? 4 : 0;
+                        if(position[partIndices[i]][1] > myHalves[1]) childOctant |= 2;
+                        if(position[partIndices[i]][2] > myHalves[2]) childOctant |= 1;
+                        indicesArray[childOctant].push_back(partIndices[i]);
 			}                			
 									
                   //Omp task is not thread safe because the tree is resized, so add omp critical above
@@ -279,16 +320,16 @@ class Tree{
                               for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                               {    
                                     //#pragma omp task
-                                    buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
+                                    buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves, rank);
                               }
                         }
  
                   }
                   else //Not worth spinning off tasks, do the rest myself*/
                   {                       
-                        for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
+                        for(char i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                         {    
-                              buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
+                              buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves, rank);
                         }
                   }
 		}
@@ -902,7 +943,7 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
 
       MPI_Wait(&request, MPI_STATUS_IGNORE);
 
-      tree.buildTree(0, position, indices, boundaries, rank);
+      tree.buildTree(0, position, indices, 127, boundaries, nullptr, rank);
 
       #pragma omp parallel for reduction(+:pe)
       for(int i = clusterStart; i < clusterEnd; i++)
