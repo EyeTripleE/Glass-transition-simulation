@@ -25,7 +25,7 @@
 #define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
-#define OUTPUT //print output?
+//#define OUTPUT //print output?
 
 
 //===================================BEGIN FUNCTION HEADERS===================================
@@ -89,10 +89,10 @@ class Tree{
             //printf("here %d\n", nodeIndex);
             //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
             //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
-                      
+     
             if(nodeIndex >= nodesArray.size())
                  nodesArray.resize(nodeIndex + 1);
-
+            
 		if(partIndices.size() == 0)
 		{
 			nodesArray[nodeIndex].particleIndex = EMPTY_LEAF;
@@ -152,13 +152,13 @@ class Tree{
 
 			//Subdivide the indices based on boundaries
                   char octant;
-                  #pragma omp parallel for private(octant)
+                  //#pragma omp parallel for private(octant) //Seems to be slower with this
 			for(int i = 0; i < partIndices.size(); i++)
 			{
                         octant = position[partIndices[i]][0] > halfX ? 4 : 0; 
                         if(position[partIndices[i]][1] > halfY) octant |= 2;
                         if(position[partIndices[i]][2] > halfZ) octant |= 1;
-                        #pragma omp critical
+                        //#pragma omp critical
                         indicesArray[octant].push_back(partIndices[i]);
 			}                			
 									
@@ -174,14 +174,123 @@ class Tree{
                   //{}
                   else //Build 
                   { 
-                        //Omp task is not thread safe because the tree is resized
-                        for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
+                        //Omp task is not thread safe because the tree is resized, so add omp critical
+                        #pragma omp parallel
+                        #pragma omp single nowait
                         {
-                              buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
+                              for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
+                              {    
+                                    #pragma omp task
+                                    buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
+                              }
                         }
                   }          
 		}
 	}
+
+	void buildTreeTask(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double *boundaries, int rank)
+	{	
+            //if(rank == 0) printf("here %d\n", nodeIndex);
+            //printf("here %d\n", nodeIndex);
+            //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
+            //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
+     
+            #pragma omp critical
+            {
+            if(nodeIndex >= nodesArray.size())
+                 nodesArray.resize(nodeIndex + 1);
+            }
+
+		if(partIndices.size() == 0)
+		{
+			nodesArray[nodeIndex].particleIndex = EMPTY_LEAF;
+		}
+		else if(partIndices.size() == 1)
+		{
+			nodesArray[nodeIndex].particleIndex = partIndices[0];
+			//Assume equivalent mass, otherwise will need to modify
+			nodesArray[nodeIndex].mass = 1.0f;
+                  memcpy(&(nodesArray[nodeIndex].com[0]), &position[partIndices[0]][0], DIM*sizeof(double));	
+		}
+		else
+		{
+			//Assuming mass of one, sum mass
+                  nodesArray[nodeIndex].particleIndex = BRANCH;
+			nodesArray[nodeIndex].mass = partIndices.size();
+
+			//Assuming mass of one per particle, average location
+                  //Zero out center of mass
+                  memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
+
+                  int index;
+                  double com0 = 0.0;
+                  double com1 = 0.0;
+                  double com2 = 0.0;
+             
+			for(int i = 0; i < partIndices.size(); i++)
+			{
+                        index = partIndices[i];
+                        com0 += position[index][0];
+                        com1 += position[index][1];
+                        //Same as com1 if DIM == 2, messes up vectorization for two dimensions
+                        com2 += position[index][DIM - 1];
+			}
+
+                  double invSize = 1.0/partIndices.size();
+                  nodesArray[nodeIndex].com[0] = com0*invSize;
+                  nodesArray[nodeIndex].com[1] = com1*invSize;
+                  nodesArray[nodeIndex].com[DIM - 1] = com2*invSize;
+			
+			//Create new boundaries
+			double halfX = 0.5*(boundaries[0] + boundaries[1]);
+			double halfY = 0.5*(boundaries[2] + boundaries[3]);
+			double halfZ = 0.5*(boundaries[4] + boundaries[5]);                
+                  
+                  double boundaryArray[8][6] = {{boundaries[0],halfX,boundaries[2],halfY,boundaries[4],halfZ},//bottom, front, left
+                       				      {boundaries[0],halfX,boundaries[2],halfY,halfZ,boundaries[5]},
+							      {boundaries[0],halfX,halfY,boundaries[3],boundaries[4],halfZ},
+							      {boundaries[0],halfX,halfY,boundaries[3],halfZ,boundaries[5]},
+                                                {halfX,boundaries[1],boundaries[2],halfY,boundaries[4],halfZ},
+							      {halfX,boundaries[1],boundaries[2],halfY,halfZ,boundaries[5]},
+							      {halfX,boundaries[1],halfY,boundaries[3],boundaries[4],halfZ},
+                                                {halfX,boundaries[1],halfY,boundaries[3],halfZ,boundaries[5]}};  
+
+                  std::vector<int> indicesArray[8];            
+
+			//Subdivide the indices based on boundaries
+                  char octant;
+			for(int i = 0; i < partIndices.size(); i++)
+			{
+                        octant = position[partIndices[i]][0] > halfX ? 4 : 0; 
+                        if(position[partIndices[i]][1] > halfY) octant |= 2;
+                        if(position[partIndices[i]][2] > halfZ) octant |= 1;
+                        indicesArray[octant].push_back(partIndices[i]);
+			}                			
+									
+                  //Omp task is not thread safe because the tree is resized, so add omp critical above
+
+                  if(partIndices.size() > 10) //Arbitrary cutoff for task creation
+                  {
+                        #pragma omp parallel
+                        #pragma omp single nowait
+                        {
+                              for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
+                              {    
+                                    #pragma omp task
+                                    buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
+                              }
+                        }      
+                  }
+                  else //Not worth spinning of tasks, do the rest myself
+                  {                       
+                        for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
+                        {    
+                              buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], boundaryArray[i], rank);
+                        }
+                  }
+		}
+	}
+
     
       void calcAcc(int nodeIndex, int partIndex, double (*position)[DIM], double acceleration[DIM], double &potentialEnergy)
       {            
