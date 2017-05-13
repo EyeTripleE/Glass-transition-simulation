@@ -25,7 +25,7 @@
 #define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
-//#define OUTPUT //print output?
+#define OUTPUT //print output?
 
 
 //===================================BEGIN FUNCTION HEADERS===================================
