@@ -949,11 +949,12 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
       //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
       memset(acceleration, 0, totalSize*sizeof(double));
       double pe = 0;
+      std::vector<int> startIndices;
 
       MPI_Wait(&request, MPI_STATUS_IGNORE);
 
       //Overlap the tree building and communication? How? 
-      std::vector<int> startIndices;
+
       tree.buildTree(0, position, indices, 127, boundaries, nullptr, rank, size, 0, startIndices);
 
       int j;
