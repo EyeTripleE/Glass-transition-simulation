@@ -27,7 +27,7 @@
 #define HYBRID //Add OpenMP optimizations for BARNES_HUT
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
-#define OUTPUT //print output?
+//#define OUTPUT //print output?
 
 
 //===================================BEGIN FUNCTION HEADERS===================================
