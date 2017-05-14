@@ -4,6 +4,9 @@
 * Algorithm (with Euler algorithm initialization).
 */
 
+//NOTE: If running with OpenMP, make sure OMP_THREAD_LIMIT is set (e.g. export OMP_THREAD_LIMIT=5).
+//This should probably be equal to OMP_NUM_THREADS.  
+
 //TODO: Add softening if ever use this again, figure out how to overlap communication and 
 //computation more in Barnes-Hut
 
@@ -214,38 +217,22 @@ class Tree{
                         if(index < size % levelNodes) stride += 1;                        
                         int startIndex;
 
-                        #ifdef HYBRID
-                        //Possibly spin up any OpenMP threads if we can maximize work
-                        if(8 >= (std::min(omp_get_num_threads(), 8) * stride))
+                        #pragma omp parallel private (startIndex)
+                        #pragma omp single
+                        for(int i = 7 - index; i >= 0; i -= stride) //Sweep outward in so vector won't be resized much
                         {
-                              #pragma omp parallel private (startIndex)
-                              #pragma omp single
-                              for(int i = 7 - index; i >= 0; i -= stride) //Sweep outward in so vector won't be resized much
-                              {
-                                    //Run the tigher loop version from here on
-                                    startIndex = 8*nodeIndex + (i + 1);
-                                    startIndices.push_back(startIndex);
-                                    #pragma omp task
-                                    buildTreeTask(startIndex, position, indicesArray[i], i, myBoundaries, myHalves, false);
-                              }
-                        }
-                        else
-                        #endif
-                        {
-                              for(int i = 7 - index; i >= 0; i -= stride) //Sweep outward in so vector won't be resized much
-                              {
-                                    //Run the tigher loop version from here on
-                                    startIndex = 8*nodeIndex + (i + 1);
-                                    startIndices.push_back(startIndex);
-                                    buildTreeTask(startIndex, position, indicesArray[i], i, myBoundaries, myHalves, true);
-                              }
+                              //Run the tighter loop version from here on
+                              startIndex = 8*nodeIndex + (i + 1);
+                              startIndices.push_back(startIndex);
+                              #pragma omp task
+                              buildTreeTask(startIndex, position, indicesArray[i], i, myBoundaries, myHalves);
                         }
                   }           
 		}
 	}
 
 	void buildTreeTask(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, int myOctant,
-            double parentBoundaries[6], double parentHalves[3], bool createTasks)
+            double parentBoundaries[6], double parentHalves[3])
 	{	
             //if(rank == 0) printf("here %d\n", nodeIndex);
             //printf("here %d\n", nodeIndex);
@@ -282,39 +269,34 @@ class Tree{
                   //Calculate the center of mass
                   int index;
             
-                  #ifdef HYBRID //Process isn't using its OpenMP threads yet.
-                  if(createTasks)
+                  double com0 = 0.0;
+                  double com1 = 0.0;
+                  double com2 = 0.0;
+             
+                  #pragma omp parallel for reduction(+:com0, com1, com2) private(index)
+		      for(int i = 0; i < partIndices.size(); i++)
+		      {
+                        index = partIndices[i];
+                        com0 += position[index][0];
+                        com1 += position[index][1];
+                        //Same as com1 if DIM == 2, messes up vectorization for two dimensions
+                        com2 += position[index][DIM - 1];
+		      }
+                  nodesArray[nodeIndex].com[0] = com0;
+                  nodesArray[nodeIndex].com[1] = com1;
+                  nodesArray[nodeIndex].com[DIM - 1] = com2;
+
+                  /*
+                  int j;
+                  for(int i = 0; i < partIndices.size(); i++)
                   {
-                        double com0 = 0.0;
-                        double com1 = 0.0;
-                        double com2 = 0.0;
-                   
-                        #pragma omp parallel for reduction(+:com0, com1, com2) private(index)
-			      for(int i = 0; i < partIndices.size(); i++)
-			      {
-                              index = partIndices[i];
-                              com0 += position[index][0];
-                              com1 += position[index][1];
-                              //Same as com1 if DIM == 2, messes up vectorization for two dimensions
-                              com2 += position[index][DIM - 1];
-			      }
-                        nodesArray[nodeIndex].com[0] = com0;
-                        nodesArray[nodeIndex].com[1] = com1;
-                        nodesArray[nodeIndex].com[DIM - 1] = com2;
-                  }
-                  else
-                  #endif
-                  {
-                        int j;
-                        for(int i = 0; i < partIndices.size(); i++)
+                        index = partIndices[i];
+                        for(j = 0; j < DIM; j++)
                         {
-                              index = partIndices[i];
-                              for(j = 0; j < DIM; j++)
-                              {
-                                    nodesArray[nodeIndex].com[j] += position[index][j];                              
-                              }                   
-                        }
+                              nodesArray[nodeIndex].com[j] += position[index][j];                              
+                        }                   
                   }
+                  */
 
                   double invSize = 1.0/partIndices.size();
                   for(int i = 0; i < DIM; i++)  
@@ -364,28 +346,11 @@ class Tree{
                         indicesArray[childOctant].push_back(partIndices[i]);
 			}                			
 						
-                  #ifdef HYBRID			
-                  if(createTasks)
-                  {                         
-                        #pragma omp parallel
-                        #pragma omp single
-                        {
-                              for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
-                              {    
-                                    #pragma omp task
-                                    buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves, false);
-                              }
-                        }
- 
-                  }
-                  else //Don't create new tasks
-                  #endif
-                  {                       
-                        for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
-                        {    
-                              buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves, false);
-                        }
-                  }
+                  #pragma omp parallel for                       
+                  for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
+                  {    
+                        buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves);
+                  } 
 		}
 	}
 
@@ -405,6 +370,7 @@ class Tree{
 
                   float s = nodesArray[nodeIndex].mass/sqrt((float)pythagorean);
 
+                  //The higher the s value, the less stable the energy is.
                   if(nodesArray[nodeIndex].particleIndex >= 0 || s < 0.5f) //Calculate force
                   {
 		            //Force derived from Lennard-Jones potential
@@ -514,6 +480,10 @@ int main(int argc, char* argv[])
             MPI_Abort(MPI_COMM_WORLD, 1);
       }
       #endif
+
+      //Setup openMP
+      omp_set_nested(1);
+      
 
       //START SETUP
 	//clock_t tstart = clock();
