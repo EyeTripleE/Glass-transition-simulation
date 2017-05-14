@@ -4,7 +4,8 @@
 * Algorithm (with Euler algorithm initialization).
 */
 
-//TODO: Add softening if ever use this again
+//TODO: Add softening if ever use this again, figure out how to overlap communication and 
+//computation more in Barnes-Hut
 
 #include <cmath>
 #include <iostream>
@@ -23,9 +24,10 @@
 #define BRANCH -2
 
 #define BARNES_HUT //Barnes Hut, tiles, or strips?
+#define HYBRID //Add OpenMP optimizations for BARNES_HUT
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
-//#define OUTPUT //print output?
+#define OUTPUT //print output?
 
 
 //===================================BEGIN FUNCTION HEADERS===================================
@@ -65,7 +67,8 @@ class Tree{
                   //init_mpi_ops();
             }
       
-		Tree(double (*position)[DIM], int numParticles, double boundaries[6], int rank)
+            /*
+		Tree(double (*position)[DIM], int numParticles, double boundaries[6], int rank, int size, std::vector<int> &startIndices)
 		{
                   //init_mpi_ops();
 			std::vector<int> indices(numParticles);
@@ -74,8 +77,9 @@ class Tree{
                   {				
                         indices[i] = i;		
                   }
-			buildTree(0, position, indices, 127, boundaries, nullptr, rank);
+			buildTree(0, position, indices, 127, boundaries, nullptr, rank, size, startIndices);
 		};
+            */
 
             Tree(std::vector<Node> &vec)
             {
@@ -83,9 +87,9 @@ class Tree{
                   nodesArray = vec;
             }
 
-      //Create vector based tree. Can split work among processes at second level.
-	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, char myOctant,
-            double parentBoundaries[6], double parentHalves[3], int rank)
+      //TODO Fix so works with 2D or 3D simulations
+	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, int myOctant,
+            double parentBoundaries[6], double parentHalves[3], int rank, int size, int level, std::vector<int> &startIndices)
 	{	
             //if(rank == 0) printf("here %d\n", nodeIndex);
             //printf("here %d\n", nodeIndex);
@@ -127,11 +131,15 @@ class Tree{
                         //Same as com1 if DIM == 2, messes up vectorization for two dimensions
                         com2 += position[index][DIM - 1];
 			}
+                  nodesArray[nodeIndex].com[0] = com0;
+                  nodesArray[nodeIndex].com[1] = com1;
+                  nodesArray[nodeIndex].com[DIM - 1] = com2;
 
                   double invSize = 1.0/partIndices.size();
-                  nodesArray[nodeIndex].com[0] = com0*invSize;
-                  nodesArray[nodeIndex].com[1] = com1*invSize;
-                  nodesArray[nodeIndex].com[DIM - 1] = com2*invSize;
+                  for(int i = 0; i < DIM; i++)  
+                  {
+                        nodesArray[nodeIndex].com[i] *= invSize;
+                  }
 
                   double myBoundaries[6];
 
@@ -145,8 +153,8 @@ class Tree{
                   {
                         //Not generalized currently
                         int index2;
-                        char andVal = 7;
-                        char ltVal = 4; //less than value
+                        int andVal = 7;
+                        int ltVal = 4; //less than value
                         for(int i = 0; i < 3; i++)  
                         {
                               index = 2*i;
@@ -176,7 +184,7 @@ class Tree{
 
 			//Subdivide the indices based on boundaries
                   //push_back means OpenMP cannot perform well
-                  char childOctant;
+                  int childOctant;
 			for(int i = 0; i < partIndices.size(); i++)
 			{
                         //Breaks with if statement |= 4 for some reason 
@@ -184,44 +192,67 @@ class Tree{
                         if(position[partIndices[i]][1] > myHalves[1]) childOctant |= 2;
                         if(position[partIndices[i]][2] > myHalves[2]) childOctant |= 1;
                         indicesArray[childOctant].push_back(partIndices[i]);
-			}                			
-									
-			//Build tree based on subdivisions //Can generalize to handle any power of 8 based on size and nodeIndex
-                  //Could generalize to handle any 1, 2, 4, 8! Maybe more if subdivide at lower levels
-                  if(nodeIndex == 0) //&& size >= 8 //Spin off new threads at first level
+			}        
+
+                  int levelNodes = 1;
+                  for(int i = 0; i < level; i++)
                   {
-                        index = rank % 8;    
-                        buildTree(index + 1, position, indicesArray[index], (char)index, myBoundaries, myHalves, rank);                                   
+                        levelNodes *= 8;
+                  }     
+                  int nextLevelNodes = levelNodes * 8;
+
+                  index = (rank % nextLevelNodes) / levelNodes; //Convert rank to branch number
+                  if(size > nextLevelNodes) //Too many processors, divide them to work on children
+                  {                                                                    
+                        buildTree(8*nodeIndex + (index + 1), position, indicesArray[index], index, 
+                              myBoundaries, myHalves, rank, size, level + 1, startIndices);
                   }
-                  //Potential case for 64 processes.
-                  //else if(nodeIndex > 0 && nodeIndex <= 9 && size >= 64)
-                  //{}
-                  else //Build 
-                  { 
-                        //Omp task is not thread safe because the tree is resized, so add omp critical
-                        //#pragma omp parallel
-                        //#pragma omp single nowait
-                        //{
-                              #pragma omp parallel for //Spin off some openMP threads
-                              for(char i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
-                              {    
-                                    //#pragma omp task
-                                    buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves, rank);
+                  else //No longer oversaturated
+                  {
+                        int stride = size / levelNodes;
+                        //Dole out the remainder
+                        if(index < size % levelNodes) stride += 1;                        
+                        int startIndex;
+
+                        #ifdef HYBRID
+                        //Possibly spin up any OpenMP threads if we can maximize work
+                        if(8 >= (std::min(omp_get_num_threads(), 8) * stride))
+                        {
+                              #pragma omp parallel private (startIndex)
+                              #pragma omp single
+                              for(int i = 7 - index; i >= 0; i -= stride) //Sweep outward in so vector won't be resized much
+                              {
+                                    //Run the tigher loop version from here on
+                                    startIndex = 8*nodeIndex + (i + 1);
+                                    startIndices.push_back(startIndex);
+                                    #pragma omp task
+                                    buildTreeTask(startIndex, position, indicesArray[i], i, myBoundaries, myHalves, false);
                               }
-                        //}
-                  }          
+                        }
+                        else
+                        #endif
+                        {
+                              for(int i = 7 - index; i >= 0; i -= stride) //Sweep outward in so vector won't be resized much
+                              {
+                                    //Run the tigher loop version from here on
+                                    startIndex = 8*nodeIndex + (i + 1);
+                                    startIndices.push_back(startIndex);
+                                    buildTreeTask(startIndex, position, indicesArray[i], i, myBoundaries, myHalves, true);
+                              }
+                        }
+                  }           
 		}
 	}
 
-	void buildTreeTask(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, char myOctant,
-            double parentBoundaries[6], double parentHalves[3], int rank)
+	void buildTreeTask(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, int myOctant,
+            double parentBoundaries[6], double parentHalves[3], bool createTasks)
 	{	
             //if(rank == 0) printf("here %d\n", nodeIndex);
             //printf("here %d\n", nodeIndex);
             //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
             //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
      
-            #pragma omp critical
+            #pragma omp critical //Not thread safe
             {
             if(nodeIndex >= nodesArray.size())
                  nodesArray.resize(nodeIndex + 1);
@@ -250,15 +281,41 @@ class Tree{
 
                   //Calculate the center of mass
                   int index;
-                  int j;
-                  for(int i = 0; i < partIndices.size(); i++)
+            
+                  #ifdef HYBRID //Process isn't using its OpenMP threads yet.
+                  if(createTasks)
                   {
-                        index = partIndices[i];
-                        for(j = 0; j < DIM; j++)
-                        {
-                              nodesArray[nodeIndex].com[j] += position[index][j];                              
-                        }                   
+                        double com0 = 0.0;
+                        double com1 = 0.0;
+                        double com2 = 0.0;
+                   
+                        #pragma omp parallel for reduction(+:com0, com1, com2) private(index)
+			      for(int i = 0; i < partIndices.size(); i++)
+			      {
+                              index = partIndices[i];
+                              com0 += position[index][0];
+                              com1 += position[index][1];
+                              //Same as com1 if DIM == 2, messes up vectorization for two dimensions
+                              com2 += position[index][DIM - 1];
+			      }
+                        nodesArray[nodeIndex].com[0] = com0;
+                        nodesArray[nodeIndex].com[1] = com1;
+                        nodesArray[nodeIndex].com[DIM - 1] = com2;
                   }
+                  else
+                  #endif
+                  {
+                        int j;
+                        for(int i = 0; i < partIndices.size(); i++)
+                        {
+                              index = partIndices[i];
+                              for(j = 0; j < DIM; j++)
+                              {
+                                    nodesArray[nodeIndex].com[j] += position[index][j];                              
+                              }                   
+                        }
+                  }
+
                   double invSize = 1.0/partIndices.size();
                   for(int i = 0; i < DIM; i++)  
                   {
@@ -271,8 +328,8 @@ class Tree{
                   
                   //Not generalized currently
                   int index2;
-                  char andVal = 7;
-                  char ltVal = 4; //less than value
+                  int andVal = 7;
+                  int ltVal = 4; //less than value
                   for(int i = 0; i < 3; i++)  
                   {
                         index = 2*i;
@@ -297,7 +354,7 @@ class Tree{
 
 			//Subdivide the indices based on boundaries
                   //push_back means OpenMP cannot perform well
-                  char childOctant;
+                  int childOctant;
 			for(int i = 0; i < partIndices.size(); i++)
 			{
                         //Breaks with if statement for some reason
@@ -306,37 +363,34 @@ class Tree{
                         if(position[partIndices[i]][2] > myHalves[2]) childOctant |= 1;
                         indicesArray[childOctant].push_back(partIndices[i]);
 			}                			
-									
-                  //Omp task is not thread safe because the tree is resized, so add omp critical above
-                  //Spinning off tasks breaks on intel compiler, works for gcc.
-                  //Doesn't really matter is maximum number of used cores is 64 because all cores will
-                  //have work if have at least 8 mpi processes.
-                  /*
-                  if(partIndices.size() > 10) //Arbitrary cutoff for task creation
-                  {
-                        //#pragma omp parallel
-                        //#pragma omp single nowait
+						
+                  #ifdef HYBRID			
+                  if(createTasks)
+                  {                         
+                        #pragma omp parallel
+                        #pragma omp single
                         {
                               for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                               {    
-                                    //#pragma omp task
-                                    buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves, rank);
+                                    #pragma omp task
+                                    buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves, false);
                               }
                         }
  
                   }
-                  else //Not worth spinning off tasks, do the rest myself*/
+                  else //Don't create new tasks
+                  #endif
                   {                       
-                        for(char i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
+                        for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                         {    
-                              buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves, rank);
+                              buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves, false);
                         }
                   }
 		}
 	}
 
     
-      void calcAcc(int nodeIndex, int partIndex, double (*position)[DIM], double acceleration[DIM], double &potentialEnergy)
+      void calcAcc(int nodeIndex, int partIndex, double myPosition[DIM], double acceleration[DIM], double &potentialEnergy)
       {            
             //Empty square or itself, do nothing
             if(nodesArray[nodeIndex].particleIndex != EMPTY_LEAF && nodesArray[nodeIndex].particleIndex != partIndex)
@@ -345,7 +399,7 @@ class Tree{
                   double pythagorean = 0.0f;
                   for(int i = 0; i < DIM; i++)
                   {
-                        vectors[i] = determineVectorFlat(position[partIndex][i], nodesArray[nodeIndex].com[i]);
+                        vectors[i] = determineVectorFlat(myPosition[i], nodesArray[nodeIndex].com[i]);
                         pythagorean += vectors[i]*vectors[i];
                   }
 
@@ -373,7 +427,7 @@ class Tree{
                   else //Check children
                   {
                         for(int i = 0; i < 8; i++)
-                              calcAcc(8*nodeIndex + (i + 1), partIndex, position, acceleration, potentialEnergy);
+                              calcAcc(8*nodeIndex + (i + 1), partIndex, myPosition, acceleration, potentialEnergy);
                   }   
             }   
       }
@@ -398,9 +452,8 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 
 //Barnes-Hut version
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
-     int myStart, int myEnd, int clusterStart, int clusterEnd,
-     int rank, int particlesType1,
-     double &potentialEnergy, double boundaries[6], Tree &tree, std::vector<int> &indices);
+     int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
+     double boundaries[6], Tree &tree, std::vector<int> &indices);
 
 //Function that performs the Euler algorithm on all particles in the set
 void performEulerOperation(int myStart, int myEnd,
@@ -435,7 +488,6 @@ void cleanup(double (*position)[DIM], double (*oldPosition)[DIM],
 
 //=======================================================================================
 
-MPI_Comm COMM_CLUSTER;
 MPI_Comm COMM_COLUMN;
 MPI_Comm COMM_ROW;
 
@@ -455,13 +507,7 @@ int main(int argc, char* argv[])
       MPI_Comm_size(MPI_COMM_WORLD, &size);
       MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-      #if defined(BARNES_HUT)
-      if(size % 8 != 0)
-      {            
-            printf("Error: Number of processes is not a multiple of 8\n");
-            MPI_Abort(MPI_COMM_WORLD, 1);
-      }
-      #elif defined(TILES)
+      #if defined(TILES)
       if(!(size == 1 || size == 2 || size == 4 || size == 16 || size == 64))
       {
             printf("Error: Number of processes is not a (small) factor of 1024\n");
@@ -492,16 +538,7 @@ int main(int argc, char* argv[])
 	int myStart = rank*localParticles;
 	int myEnd = (rank + 1)*localParticles;
 
-      #if defined(BARNES_HUT)
-
-      int numClusters = std::max(1, size/8);
-      int clusterID = rank/8;
-      int clusterParticles = totalParticles / numClusters;     
-      int clusterStart = clusterParticles*clusterID;
-      int clusterEnd = clusterParticles*(clusterID + 1);
-      MPI_Comm_split(MPI_COMM_WORLD, clusterID, rank, &COMM_CLUSTER);
-
-      #elif defined(TILES)
+      #if defined(TILES)
 
       int reorder = 0;
       int coord[2];
@@ -584,10 +621,10 @@ int main(int argc, char* argv[])
       for(int i = 0; i < totalParticles; i++)
             indices[i] = i;  
 
-      #if defined(BARNES_HUT)
-      int accDisp = clusterStart - myStart;
-      #elif defined(TILES)
+      #if defined(TILES)
       int accDisp = rowStart - myStart;
+      #elif defined(BARNES_HUT)
+      int accDisp = -myStart; //Start at zero
       #else
       int accDisp = 0; 
       #endif   
@@ -607,7 +644,7 @@ int main(int argc, char* argv[])
 	{
             #if defined(BARNES_HUT)
 	      calcAccelerationBH(acceleration, position, myStart, myEnd,
-                clusterStart, clusterEnd, rank, numParticlesType1, energies[1], boundaries, tree, indices);
+                rank, size, numParticlesType1, energies[1], boundaries, tree, indices);
             #elif defined(TILES)
             calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, 
                   columnStart, columnEnd, targetRank, coord, numParticlesType1, energies[1], boundaries);
@@ -643,7 +680,7 @@ int main(int argc, char* argv[])
 		}
             #endif
 	}     
-      
+
 	cleanup(position, velocity, acceleration, oldPosition);
 
       if(rank == 0)
@@ -927,35 +964,43 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 }
 
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
-     int myStart, int myEnd, int clusterStart, int clusterEnd,
-     int rank, int particlesType1,
-     double &potentialEnergy, double boundaries[6], Tree &tree, std::vector<int> &indices)
+     int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
+     double boundaries[6], Tree &tree, std::vector<int> &indices)
 {                
-      int localSize = DIM*(myEnd - myStart);             
+      int localParticles = myEnd - myStart;
+      int localSize = DIM*localParticles;
+      int totalParticles = size*localParticles;
+      int totalSize = localSize*size;           
       MPI_Request request;
-	MPI_Iallgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, position,
-		localSize, MPI_DOUBLE, MPI_COMM_WORLD, &request);
+	MPI_Iallgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, position, 
+            localSize, MPI_DOUBLE, MPI_COMM_WORLD, &request);
      
-      //Set acceleration of cluster particles to zero, this is legal 
+      //Set acceleration of particles to zero, this is legal 
       //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
-      memset(&acceleration[clusterStart], 0, DIM*(clusterEnd - clusterStart)*sizeof(double));
+      memset(acceleration, 0, totalSize*sizeof(double));
       double pe = 0;
 
       MPI_Wait(&request, MPI_STATUS_IGNORE);
 
-      tree.buildTree(0, position, indices, 127, boundaries, nullptr, rank);
+      //Overlap the tree building and communication? How? 
+      std::vector<int> startIndices;
+      tree.buildTree(0, position, indices, 127, boundaries, nullptr, rank, size, 0, startIndices);
 
-      #pragma omp parallel for reduction(+:pe)
-      for(int i = clusterStart; i < clusterEnd; i++)
-      {
-            tree.calcAcc(rank % 8 + 1, i, position, acceleration[i], pe);
+      int j;
+      #pragma omp parallel for reduction(+:pe) private(j)
+      for(int i = 0; i < totalParticles; i++)
+      {  
+            for(j = 0; j < startIndices.size(); j++)
+            {
+                  tree.calcAcc(startIndices[j], i, position[i], acceleration[i], pe);
+            }
       }
       potentialEnergy = pe;
 
       //could use non-blocking here, but there isn't a whole lot of work to do
       //before the information is needed.
-      MPI_Reduce_scatter_block(MPI_IN_PLACE, &acceleration[clusterStart], 
-            localSize, MPI_DOUBLE, MPI_SUM, COMM_CLUSTER);          
+      MPI_Reduce_scatter_block(MPI_IN_PLACE, acceleration, 
+            localSize, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);          
 }
 
 //Function that performs the Euler algorithm on all particles in the set
