@@ -891,8 +891,8 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
             octant = entryNodes[i] % 8;
             indices.clear();
 
-            #pragma omp parallel for private(inside, k)
-            for(int j = 0; j < totalParticles; j++)
+            #pragma omp parallel for private(j, inside, k)
+            for(j = 0; j < totalParticles; j++)
             {
                   inside = true;
                   for(k = 0; k < 3; k++)
