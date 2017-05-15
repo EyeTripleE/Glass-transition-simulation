@@ -84,8 +84,6 @@ class Tree{
                                 0.5*(boundaries[2] + boundaries[3]), 
                                 0.5*(boundaries[4] + boundaries[5])};  
  
-            //Using entryBoundaries as store place, even if this is not what will be returned in the end
-            //Because not initializing, can't create in one big statement
             double childBoundaries[8][6] = {{boundaries[0],halves[0],boundaries[2],halves[1],boundaries[4],halves[2]},//bottom, front, left
                  				        {boundaries[0],halves[0],boundaries[2],halves[1],halves[2],boundaries[5]},
 						        {boundaries[0],halves[0],halves[1],boundaries[3],boundaries[4],halves[2]},
@@ -129,7 +127,7 @@ class Tree{
 
             //Figure out the branches
 
-            int level = floor(log(nodeIndex + 1));
+            int level = floor(log(nodeIndex + 1) / log(8.0));
             int levelNodes = 1;
             for(int i = 0; i < level; i++)
             {
