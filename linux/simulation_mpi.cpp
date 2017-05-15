@@ -27,10 +27,10 @@
 #define BRANCH -2
 
 #define BARNES_HUT //Barnes Hut, tiles, or strips?
-#define HYBRID //Add OpenMP optimizations for BARNES_HUT
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
-//#define OUTPUT //print output?
+#define OUTPUT //print output?
+//#define HYBRID //Pure OpenMP or hybrid
 
 
 //===================================BEGIN FUNCTION HEADERS===================================
@@ -60,6 +60,7 @@ struct Node{
       //std::vector<int> indicesArray[8];
 };
 
+//TODO Fix so works with 2D or 3D simulations
 class Tree{
 
       public:
@@ -69,20 +70,6 @@ class Tree{
             {
                   //init_mpi_ops();
             }
-      
-            /*
-		Tree(double (*position)[DIM], int numParticles, double boundaries[6], int rank, int size, std::vector<int> &startIndices)
-		{
-                  //init_mpi_ops();
-			std::vector<int> indices(numParticles);
-                  #pragma omp parallel for
-			for(int i = 0; i < numParticles; i++)
-                  {				
-                        indices[i] = i;		
-                  }
-			buildTree(0, position, indices, 127, boundaries, nullptr, rank, size, startIndices);
-		};
-            */
 
             Tree(std::vector<Node> &vec)
             {
@@ -90,158 +77,100 @@ class Tree{
                   nodesArray = vec;
             }
 
-      //TODO Fix so works with 2D or 3D simulations
-	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, int myOctant,
-            double parentBoundaries[6], double parentHalves[3], int rank, int size, int level, std::vector<int> &startIndices)
-	{	
-            //if(rank == 0) printf("here %d\n", nodeIndex);
-            //printf("here %d\n", nodeIndex);
-            //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
-            //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
-     
-            if(nodeIndex >= nodesArray.size())
-                 nodesArray.resize(nodeIndex + 1);
-            
-		if(partIndices.size() == 0)
-		{
-			nodesArray[nodeIndex].particleIndex = EMPTY_LEAF;
-		}
-		else if(partIndices.size() == 1)
-		{
-			nodesArray[nodeIndex].particleIndex = partIndices[0];
-			//Assume equivalent mass, otherwise will need to modify
-			nodesArray[nodeIndex].mass = 1.0f;
-                  memcpy(&(nodesArray[nodeIndex].com[0]), &position[partIndices[0]][0], DIM*sizeof(double));	
-		}
-		else
-		{
-			//Assuming mass of one, sum mass
-                  nodesArray[nodeIndex].particleIndex = BRANCH;
-			nodesArray[nodeIndex].mass = partIndices.size();
+	void determineEntryPoints(int nodeIndex, double boundaries[6], int rank, int size,
+            std::vector<int> &entryNodes, double entryBoundaries[8][6])
+      {
 
-			//Assuming mass of one per particle, average location
-                  int index;
-                  double com0 = 0.0;
-                  double com1 = 0.0;
-                  double com2 = 0.0;
-             
-                  #pragma omp parallel for reduction(+:com0, com1, com2) private(index)
-			for(int i = 0; i < partIndices.size(); i++)
-			{
-                        index = partIndices[i];
-                        com0 += position[index][0];
-                        com1 += position[index][1];
-                        //Same as com1 if DIM == 2, messes up vectorization for two dimensions
-                        com2 += position[index][DIM - 1];
-			}
-                  nodesArray[nodeIndex].com[0] = com0;
-                  nodesArray[nodeIndex].com[1] = com1;
-                  nodesArray[nodeIndex].com[DIM - 1] = com2;
+            double halves[3] = {0.5*(boundaries[0] + boundaries[1]),
+                                0.5*(boundaries[2] + boundaries[3]), 
+                                0.5*(boundaries[4] + boundaries[5])};  
+ 
+            //Using entryBoundaries as store place, even if this is not what will be returned in the end
+            //Because not initializing, can't create in one big statement
+            double childBoundaries[8][6] = {{boundaries[0],halves[0],boundaries[2],halves[1],boundaries[4],halves[2]},//bottom, front, left
+                 				        {boundaries[0],halves[0],boundaries[2],halves[1],halves[2],boundaries[5]},
+						        {boundaries[0],halves[0],halves[1],boundaries[3],boundaries[4],halves[2]},
+						        {boundaries[0],halves[0],halves[1],boundaries[3],halves[2],boundaries[5]},
+                                            {halves[0],boundaries[1],boundaries[2],halves[1],boundaries[4],halves[2]},
+						        {halves[0],boundaries[1],boundaries[2],halves[1],halves[2],boundaries[5]},
+						        {halves[0],boundaries[1],halves[1],boundaries[3],boundaries[4],halves[2]},
+                                            {halves[0],boundaries[1],halves[1],boundaries[3],halves[2],boundaries[5]}};  
+            /*for(int octant = 0; octant < 8; octant++)
 
-                  double invSize = 1.0/partIndices.size();
-                  for(int i = 0; i < DIM; i++)  
-                  {
-                        nodesArray[nodeIndex].com[i] *= invSize;
-                  }
+            //Figure out the boundaries
+            int index;
+            int index2;
+            int andVal = 7;
+            int ltVal = 4; //less than value
+            int i;
 
-                  double myBoundaries[6];
-
-
-                  //Not generalized currently
-                  if(myOctant >= 8) //I am the root, parentBoundaries stores myBoundaries
-                  {
-                        memcpy(myBoundaries, parentBoundaries, 6*sizeof(double));
-                  }
-                  else //I am not the root, actually calculate
-                  {
-                        //Not generalized currently
-                        int index2;
-                        int andVal = 7;
-                        int ltVal = 4; //less than value
-                        for(int i = 0; i < 3; i++)  
-                        {
-                              index = 2*i;
-                              index2 = index + 1;
-
-                              if((myOctant & andVal) < ltVal)
-                              {
-                                    myBoundaries[index] = parentBoundaries[index];
-                                    myBoundaries[index2] = parentHalves[i];
-                              }                        
-                              else
-                              {
-                                    myBoundaries[index] = parentHalves[i];
-                                    myBoundaries[index2] = parentBoundaries[index2];
-                              }
-
-                              andVal >>= 1;
-                              ltVal >>= 1;
-                        }       
-                  }
-
-                  double myHalves[3] = {0.5*(myBoundaries[0] + myBoundaries[1]),
-                                        0.5*(myBoundaries[2] + myBoundaries[3]), 
-                                        0.5*(myBoundaries[4] + myBoundaries[5])};                  
-
-                  std::vector<int> indicesArray[8];            
-
-			//Subdivide the indices based on boundaries
-                  //push_back means OpenMP cannot perform well
-                  int childOctant;
-			for(int i = 0; i < partIndices.size(); i++)
-			{
-                        //Breaks with if statement |= 4 for some reason 
-                        childOctant = position[partIndices[i]][0] > myHalves[0] ? 4 : 0;
-                        if(position[partIndices[i]][1] > myHalves[1]) childOctant |= 2;
-                        if(position[partIndices[i]][2] > myHalves[2]) childOctant |= 1;
-                        indicesArray[childOctant].push_back(partIndices[i]);
-			}        
-
-                  int levelNodes = 1;
-                  for(int i = 0; i < level; i++)
-                  {
-                        levelNodes *= 8;
-                  }     
-                  int nextLevelNodes = levelNodes * 8;
-
-                  index = (rank % nextLevelNodes) / levelNodes; //Convert rank to branch number
-                  if(size > nextLevelNodes) //Too many processors, divide them to work on children
-                  {                                                                    
-                        buildTree(8*nodeIndex + (index + 1), position, indicesArray[index], index, 
-                              myBoundaries, myHalves, rank, size, level + 1, startIndices);
-                  }
-                  else //No longer oversaturated
-                  {
-                        int stride = size / levelNodes;
-                        //Dole out the remainder
-                        if(index < size % levelNodes) stride += 1;                        
-                        int startIndex;
-
-                        #pragma omp parallel private (startIndex)
-                        #pragma omp single
-                        for(int i = 7 - index; i >= 0; i -= stride) //Sweep outward in so vector won't be resized much
-                        {
-                              //Run the tighter loop version from here on
-                              startIndex = 8*nodeIndex + (i + 1);
-                              startIndices.push_back(startIndex);
-                              #pragma omp task
-                              buildTreeTask(startIndex, position, indicesArray[i], i, myBoundaries, myHalves);
-                        }
-                  }           
-		}
-	}
-
-	void buildTreeTask(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, int myOctant,
-            double parentBoundaries[6], double parentHalves[3])
-	{	
-            //if(rank == 0) printf("here %d\n", nodeIndex);
-            //printf("here %d\n", nodeIndex);
-            //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
-            //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
-     
-            #pragma omp critical //Not thread safe
             {
+                  for(i = 0; i < 3; i++)    
+                  {
+                        index = 2*i;
+                        index2 = index + 1;
+
+                        if((octant & andVal) < ltVal)
+                        {
+                              entryBoundaries[octant][index] = boundaries[index];
+                              entryBoundaries[octant][index2] = halves[i];
+                        }                        
+                        else
+                        {
+                              entryBoundaries[octant][index] = halves[i];
+                              entryBoundaries[octant][index2] = boundaries[index2];
+                        }
+
+                        andVal >>= 1;
+                        ltVal >>= 1;
+                  }    
+            }*/                   
+
+            //Figure out the branches
+
+            int level = floor(log(nodeIndex + 1));
+            int levelNodes = 1;
+            for(int i = 0; i < level; i++)
+            {
+                  levelNodes *= 8;
+            }     
+            int nextLevelNodes = levelNodes * 8;
+            int index = (rank % nextLevelNodes) / levelNodes; //Convert rank to branch number
+
+            if(size > nextLevelNodes) //Too many processors, divide them to work on children
+            {                                                                    
+                  //Take next branch down the tree
+                  determineEntryPoints(8*nodeIndex + (index + 1), childBoundaries[index], 
+                        rank, size, entryNodes, entryBoundaries);
+            }
+            else //No longer oversaturated
+            {
+                  //This is only done once so it doesn't matter that unneeded information is copied
+                  memcpy(entryBoundaries, childBoundaries, 8*6*sizeof(double));
+                  //We have found the split point, recursion terminates
+                  int stride = size / levelNodes;
+                  //Dole out the remainder
+                  if(index < size % levelNodes) stride += 1;                        
+                  int entryIndex;
+
+                  for(int i = 7 - index; i >= 0; i -= stride) 
+                  {
+                        entryIndex = 8*nodeIndex + (i + 1);
+                        entryNodes.push_back(entryIndex);
+                  }
+            }      
+      }
+
+	void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double boundaries[6])
+	{	
+            //if(rank == 0) printf("here %d\n", nodeIndex);
+            //printf("here %d\n", nodeIndex);
+            //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
+            //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
+     
             if(nodeIndex >= nodesArray.size())
+            {      
+                 #pragma omp critical //Not thread safe
                  nodesArray.resize(nodeIndex + 1);
             }
 
@@ -305,32 +234,18 @@ class Tree{
                   }
 			
 			//Create new boundaries
-                  double myBoundaries[6];
-                  double myHalves[3];            
-                  
-                  //Not generalized currently
-                  int index2;
-                  int andVal = 7;
-                  int ltVal = 4; //less than value
-                  for(int i = 0; i < 3; i++)  
-                  {
-                        index = 2*i;
-                        index2 = index + 1;
+                  double halves[3] = {0.5*(boundaries[0] + boundaries[1]),
+                                      0.5*(boundaries[2] + boundaries[3]), 
+                                      0.5*(boundaries[4] + boundaries[5])};                     
 
-                        if((myOctant & andVal) < ltVal)
-                        {
-                              myBoundaries[index] = parentBoundaries[index];
-                              myBoundaries[index2] = parentHalves[i];
-                        }                        
-                        else
-                        {
-                              myBoundaries[index] = parentHalves[i];
-                              myBoundaries[index2] = parentBoundaries[index2];
-                        }
-                        myHalves[i] = 0.5*(myBoundaries[index] + myBoundaries[index2]);
-                        andVal >>= 1;
-                        ltVal >>= 1;
-                  }                        
+                  double childBoundaries[8][6] = {{boundaries[0],halves[0],boundaries[2],halves[1],boundaries[4],halves[2]},//bottom, front, left
+                       				        {boundaries[0],halves[0],boundaries[2],halves[1],halves[2],boundaries[5]},
+							        {boundaries[0],halves[0],halves[1],boundaries[3],boundaries[4],halves[2]},
+							        {boundaries[0],halves[0],halves[1],boundaries[3],halves[2],boundaries[5]},
+                                                  {halves[0],boundaries[1],boundaries[2],halves[1],boundaries[4],halves[2]},
+							        {halves[0],boundaries[1],boundaries[2],halves[1],halves[2],boundaries[5]},
+							        {halves[0],boundaries[1],halves[1],boundaries[3],boundaries[4],halves[2]},
+                                                  {halves[0],boundaries[1],halves[1],boundaries[3],halves[2],boundaries[5]}};                   
 
                   std::vector<int> indicesArray[8];            
 
@@ -340,16 +255,16 @@ class Tree{
 			for(int i = 0; i < partIndices.size(); i++)
 			{
                         //Breaks with if statement for some reason
-                        childOctant = position[partIndices[i]][0] > myHalves[0] ? 4 : 0;
-                        if(position[partIndices[i]][1] > myHalves[1]) childOctant |= 2;
-                        if(position[partIndices[i]][2] > myHalves[2]) childOctant |= 1;
+                        childOctant = position[partIndices[i]][0] > halves[0] ? 4 : 0;
+                        if(position[partIndices[i]][1] > halves[1]) childOctant |= 2;
+                        if(position[partIndices[i]][2] > halves[2]) childOctant |= 1;
                         indicesArray[childOctant].push_back(partIndices[i]);
 			}                			
 						
                   #pragma omp parallel for                       
                   for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
                   {    
-                        buildTreeTask(8*nodeIndex + (i + 1), position, indicesArray[i], i, myBoundaries, myHalves);
+                        buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], childBoundaries[i]);
                   } 
 		}
 	}
@@ -419,7 +334,7 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 //Barnes-Hut version
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
-     double boundaries[6], Tree &tree, std::vector<int> &indices);
+     Tree &tree, std::vector<int> &indices, std::vector<int> &entryNodes, double entryBoundaries[8][6]);
 
 //Function that performs the Euler algorithm on all particles in the set
 void performEulerOperation(int myStart, int myEnd,
@@ -482,8 +397,9 @@ int main(int argc, char* argv[])
       #endif
 
       //Setup openMP
+      #ifdef HYBRID
       omp_set_nested(1);
-      
+      #endif      
 
       //START SETUP
 	//clock_t tstart = clock();
@@ -585,16 +501,27 @@ int main(int argc, char* argv[])
 	      positionFile.open("position.txt");
 	      energyFile.open("energy.txt");
       }
-      
-      Tree tree;
-      std::vector<int> indices(totalParticles);
-      for(int i = 0; i < totalParticles; i++)
-            indices[i] = i;  
 
       #if defined(TILES)
       int accDisp = rowStart - myStart;
       #elif defined(BARNES_HUT)
       int accDisp = -myStart; //Start at zero
+      Tree tree;
+      double entryBoundaries[8][6];
+      std::vector<int> entryNodes;
+      tree.determineEntryPoints(0, boundaries, rank, size, entryNodes, entryBoundaries);
+      /*      
+      for(int i = 0; i < entryNodes.size(); i++)
+            printf("%d\n", entryNodes[i]);
+      for(int i = 0; i < 8; i++)
+            for(int j = 0; j < 6; j++)
+                  printf("%f\n", entryBoundaries[i][j]); 
+      exit(1);     
+      */
+
+      std::vector<int> indices(totalParticles);
+      //for(int i = 0; i < totalParticles; i++)
+      //      indices[i] = i;  
       #else
       int accDisp = 0; 
       #endif   
@@ -614,7 +541,7 @@ int main(int argc, char* argv[])
 	{
             #if defined(BARNES_HUT)
 	      calcAccelerationBH(acceleration, position, myStart, myEnd,
-                rank, size, numParticlesType1, energies[1], boundaries, tree, indices);
+                rank, size, numParticlesType1, energies[1], tree, indices, entryNodes, entryBoundaries);
             #elif defined(TILES)
             calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, 
                   columnStart, columnEnd, targetRank, coord, numParticlesType1, energies[1], boundaries);
@@ -935,35 +862,65 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
-     double boundaries[6], Tree &tree, std::vector<int> &indices)
+     Tree &tree, std::vector<int> &indices, std::vector<int> &entryNodes, double entryBoundaries[8][6])
 {                
       int localParticles = myEnd - myStart;
       int localSize = DIM*localParticles;
-      int totalParticles = size*localParticles;
-      int totalSize = localSize*size;           
+        
       MPI_Request request;
 	MPI_Iallgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, position, 
             localSize, MPI_DOUBLE, MPI_COMM_WORLD, &request);
+
+      int totalParticles = size*localParticles;
+      int totalSize = localSize*size;   
      
       //Set acceleration of particles to zero, this is legal 
       //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
       memset(acceleration, 0, totalSize*sizeof(double));
       double pe = 0;
-      std::vector<int> startIndices;
+      int octant, j, k;
+      bool inside;
 
       MPI_Wait(&request, MPI_STATUS_IGNORE);
 
-      //Overlap the tree building and communication? How? 
+      //Maybe overlap the tree building and communication? How?
 
-      tree.buildTree(0, position, indices, 127, boundaries, nullptr, rank, size, 0, startIndices);
+      //May not have enough work for each thread to parallelize at this level
+      for(int i = 0; i < entryNodes.size(); i++)
+      {
+            octant = entryNodes[i] % 8;
+            indices.clear();
 
-      int j;
+            #pragma omp parallel for private(inside, k)
+            for(int j = 0; j < totalParticles; j++)
+            {
+                  inside = true;
+                  for(k = 0; k < 3; k++)
+                  {
+                        if(position[j][k] < entryBoundaries[octant][2*k] || 
+                           position[j][k] > entryBoundaries[octant][2*k + 1])
+                        {
+                              inside = false;
+                              break;
+                        }
+                  }  
+                             
+                  if(inside)
+                  {
+                        #pragma omp critical
+                        indices.push_back(j);
+                  }
+            }
+
+            tree.buildTree(entryNodes[i], position, indices, entryBoundaries[octant]);
+      }
+
       #pragma omp parallel for reduction(+:pe) private(j)
       for(int i = 0; i < totalParticles; i++)
       {  
-            for(j = 0; j < startIndices.size(); j++)
+            for(j = 0; j < entryNodes.size(); j++)
             {
-                  tree.calcAcc(startIndices[j], i, position[i], acceleration[i], pe);
+                  tree.calcAcc(entryNodes[j], i, position[i], acceleration[i], pe);
             }
       }
       potentialEnergy = pe;
