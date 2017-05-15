@@ -510,18 +510,7 @@ int main(int argc, char* argv[])
       double entryBoundaries[8][6];
       std::vector<int> entryNodes;
       tree.determineEntryPoints(0, boundaries, rank, size, entryNodes, entryBoundaries);
-      /*      
-      for(int i = 0; i < entryNodes.size(); i++)
-            printf("%d\n", entryNodes[i]);
-      for(int i = 0; i < 8; i++)
-            for(int j = 0; j < 6; j++)
-                  printf("%f\n", entryBoundaries[i][j]); 
-      exit(1);     
-      */
-
       std::vector<int> indices(totalParticles);
-      //for(int i = 0; i < totalParticles; i++)
-      //      indices[i] = i;  
       #else
       int accDisp = 0; 
       #endif   
