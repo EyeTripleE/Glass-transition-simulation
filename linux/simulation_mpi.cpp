@@ -30,7 +30,7 @@
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
 #define OUTPUT //print output?
-//#define HYBRID //Pure OpenMP or hybrid
+//#define HYBRID //Pure OpenMP or hybrid?
 
 
 //===================================BEGIN FUNCTION HEADERS===================================
