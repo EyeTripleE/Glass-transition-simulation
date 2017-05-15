@@ -68,12 +68,11 @@ class Tree{
 
             Tree()
             {
-                  //init_mpi_ops();
+
             }
 
             Tree(std::vector<Node> &vec)
             {
-                  //init_mpi_ops();
                   nodesArray = vec;
             }
 
@@ -95,6 +94,8 @@ class Tree{
 						        {halves[0],boundaries[1],boundaries[2],halves[1],halves[2],boundaries[5]},
 						        {halves[0],boundaries[1],halves[1],boundaries[3],boundaries[4],halves[2]},
                                             {halves[0],boundaries[1],halves[1],boundaries[3],halves[2],boundaries[5]}};  
+
+            //Old code for calculating child boundaries
             /*for(int octant = 0; octant < 8; octant++)
 
             //Figure out the boundaries
@@ -202,6 +203,7 @@ class Tree{
                   double com1 = 0.0;
                   double com2 = 0.0;
              
+                  //With OpenMP 4.0 an array (com[3]) could be reduced. Until then...
                   #pragma omp parallel for reduction(+:com0, com1, com2) private(index)
 		      for(int i = 0; i < partIndices.size(); i++)
 		      {
@@ -215,6 +217,7 @@ class Tree{
                   nodesArray[nodeIndex].com[1] = com1;
                   nodesArray[nodeIndex].com[DIM - 1] = com2;
 
+                  //Old code for calculating COM
                   /*
                   int j;
                   for(int i = 0; i < partIndices.size(); i++)
