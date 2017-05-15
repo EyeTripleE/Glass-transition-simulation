@@ -77,7 +77,7 @@ class Tree{
             }
 
 	void determineEntryPoints(int nodeIndex, double boundaries[6], int rank, int size,
-            std::vector<int> &entryNodes, double entryBoundaries[8][6])
+            std::vector<int> &entryNodes, double entryBoundaries[8][6], int level)
       {
 
             double halves[3] = {0.5*(boundaries[0] + boundaries[1]),
@@ -127,7 +127,7 @@ class Tree{
 
             //Figure out the branches
 
-            int level = floor( log( (7*(nodeIndex + 1) + 1) ) / log(8.0) );
+            //int level = floor( log( (7*(nodeIndex + 1) + 1) ) / log(8.0) ); //Get level of current node index
             int levelNodes = 1;
             for(int i = 0; i < level; i++)
             {
@@ -140,7 +140,7 @@ class Tree{
             {                                                                    
                   //Take next branch down the tree
                   determineEntryPoints(8*nodeIndex + (index + 1), childBoundaries[index], 
-                        rank, size, entryNodes, entryBoundaries);
+                        rank, size, entryNodes, entryBoundaries, level + 1);
             }
             else //No longer oversaturated
             {
@@ -510,8 +510,11 @@ int main(int argc, char* argv[])
       Tree tree;
       double entryBoundaries[8][6];
       std::vector<int> entryNodes;
-      tree.determineEntryPoints(0, boundaries, rank, size, entryNodes, entryBoundaries);
+      tree.determineEntryPoints(0, boundaries, rank, size, entryNodes, entryBoundaries, 0);
       std::vector<int> indices(totalParticles);
+      //for(int i = 0; i < entryNodes.size(); i++)
+      //      printf("%d %d\n", rank, entryNodes[i]);
+      //exit(1);
       #else
       int accDisp = 0; 
       #endif   
