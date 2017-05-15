@@ -279,7 +279,7 @@ class Tree{
             if(nodesArray[nodeIndex].particleIndex != EMPTY_LEAF && nodesArray[nodeIndex].particleIndex != partIndex)
             {
                   double vectors[DIM];
-                  double pythagorean = 0.0f;
+                  double pythagorean = 0.0;
                   for(int i = 0; i < DIM; i++)
                   {
                         vectors[i] = determineVectorFlat(myPosition[i], nodesArray[nodeIndex].com[i]);
