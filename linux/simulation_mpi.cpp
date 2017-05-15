@@ -127,7 +127,7 @@ class Tree{
 
             //Figure out the branches
 
-            int level = floor(log(nodeIndex + 1) / log(8.0));
+            int level = floor( log( (7*(nodeIndex + 1) + 1) ) / log(8.0) );
             int levelNodes = 1;
             for(int i = 0; i < level; i++)
             {
