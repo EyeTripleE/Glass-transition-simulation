@@ -10,6 +10,14 @@
 //TODO: Add softening if ever use this again, figure out how to overlap communication and 
 //computation more in Barnes-Hut
 
+//README!!!!!!!!!!!!! IMPORTANT: Set these environment variables before running
+/*
+export OMP_NUM_THREADS=<value>
+export OMP_THREAD_LIMIT=<equal to OMP_NUM_THREADS>
+export OMP_NESTED=TRUE
+export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
+*/
+
 #include <cmath>
 #include <iostream>
 #include <ctime>
