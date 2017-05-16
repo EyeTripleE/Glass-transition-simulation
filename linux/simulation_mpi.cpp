@@ -30,8 +30,6 @@
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
 #define OUTPUT //print output?
-//#define HYBRID //Pure OpenMP or hybrid?
-
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
@@ -395,11 +393,6 @@ int main(int argc, char* argv[])
             printf("Error: Number of processes is not a (small) factor of 1024\n");
             MPI_Abort(MPI_COMM_WORLD, 1);
       }
-      #endif
-
-      //Setup openMP
-      #ifdef HYBRID
-      omp_set_nested(1);
       #endif      
 
       //START SETUP
