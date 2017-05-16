@@ -37,7 +37,7 @@ export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
 #define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
-#define OUTPUT //print output?
+//#define OUTPUT //print output?
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
@@ -341,7 +341,8 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 //Barnes-Hut version
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
-     Tree &tree, std::vector<int> &indices, std::vector<int> &entryNodes, double entryBoundaries[8][6]);
+     Tree &tree, std::vector<int> indices[8], std::vector<int> &entryNodes, double entryBoundaries[8][6],
+     int entryOctants[8]);
 
 //Function that performs the Euler algorithm on all particles in the set
 void performEulerOperation(int myStart, int myEnd,
@@ -512,10 +513,10 @@ int main(int argc, char* argv[])
       double entryBoundaries[8][6];
       std::vector<int> entryNodes;
       tree.determineEntryPoints(0, boundaries, rank, size, entryNodes, entryBoundaries, 0);
-      std::vector<int> indices(totalParticles);
-      //for(int i = 0; i < entryNodes.size(); i++)
-      //      printf("%d %d\n", rank, entryNodes[i]);
-      //exit(1);
+      std::vector<int> indices[8];
+      int entryOctants[8];
+      for(int i = 0; i < entryNodes.size(); i++)
+            entryOctants[i] = entryNodes[i] - ((((entryNodes[i] - 1) / 8 ) * 8) + 1);
       #else
       int accDisp = 0; 
       #endif   
@@ -534,8 +535,9 @@ int main(int argc, char* argv[])
 	for (currentTime = 2*timestep; currentTime < maxTime; currentTime += timestep)
 	{
             #if defined(BARNES_HUT)
-	      calcAccelerationBH(acceleration, position, myStart, myEnd,
-                rank, size, numParticlesType1, energies[1], tree, indices, entryNodes, entryBoundaries);
+	      calcAccelerationBH(acceleration, position, myStart, myEnd, rank, size, 
+                numParticlesType1, energies[1], tree, indices, entryNodes, entryBoundaries,
+                entryOctants);
             #elif defined(TILES)
             calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, 
                   columnStart, columnEnd, targetRank, coord, numParticlesType1, energies[1], boundaries);
@@ -856,7 +858,8 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
-     Tree &tree, std::vector<int> &indices, std::vector<int> &entryNodes, double entryBoundaries[8][6])
+     Tree &tree, std::vector<int> indices[8], std::vector<int> &entryNodes, double entryBoundaries[8][6], 
+     int entryOctants[8])
 {                
       int localParticles = myEnd - myStart;
       int localSize = DIM*localParticles;
@@ -872,42 +875,51 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
       //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
       memset(acceleration, 0, totalSize*sizeof(double));
       double pe = 0;
-      int octant, j, k;
       bool inside;
+      int j, k;
 
       MPI_Wait(&request, MPI_STATUS_IGNORE);
 
       //Maybe overlap the tree building and communication? How?
 
-      //May not have enough work for each thread to parallelize at this level
+      //Loop over particles and add it to the corresponding list of particles 
+      //if it is inside one of my octants
+
       for(int i = 0; i < entryNodes.size(); i++)
       {
-            octant = entryNodes[i] % 8;
-            indices.clear();
-
-            #pragma omp parallel for private(j, inside, k)
-            for(j = 0; j < totalParticles; j++)
+            indices[i].clear();
+      }
+      
+      #pragma omp parallel for private(j, inside, k)
+      for(int i = 0; i < totalParticles; i++)
+      {
+            for(j = 0; j < entryNodes.size(); j++)
             {
                   inside = true;
                   for(k = 0; k < 3; k++)
                   {
-                        if(position[j][k] < entryBoundaries[octant][2*k] || 
-                           position[j][k] > entryBoundaries[octant][2*k + 1])
+                        if(position[i][k] < entryBoundaries[entryOctants[j]][2*k] || 
+                           position[i][k] > entryBoundaries[entryOctants[j]][2*k + 1])
                         {
                               inside = false;
                               break;
                         }
-                  }  
-                             
+                  }     
+                  
                   if(inside)
                   {
                         #pragma omp critical
-                        indices.push_back(j);
-                  }
-            }
+                        indices[j].push_back(i);
 
-            tree.buildTree(entryNodes[i], position, indices, entryBoundaries[octant]);
+                        break;
+                  }           
+            }
       }
+
+      for(int i = 0; i < entryNodes.size(); i++)
+      {            
+            tree.buildTree(entryNodes[i], position, indices[i], entryBoundaries[entryOctants[i]]);
+      }      
 
       #pragma omp parallel for reduction(+:pe) private(j)
       for(int i = 0; i < totalParticles; i++)
