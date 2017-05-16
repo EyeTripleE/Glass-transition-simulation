@@ -578,7 +578,7 @@ int main(int argc, char* argv[])
       {
 	      //printf("Total time (s): %g\n", (double)(clock() - tstart) / CLOCKS_PER_SEC); 
             std::chrono::high_resolution_clock::duration diff = std::chrono::high_resolution_clock::now()-start_time;
-	      std::cout<<"Time taken = "<<diff.count()<<std::endl;       
+	      std::cout<<"Ranks = " << size << " Time taken = "<<diff.count()<<std::endl;       
             positionFile.close();
             energyFile.close();
       }
