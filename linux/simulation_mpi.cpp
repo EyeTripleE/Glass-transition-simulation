@@ -15,6 +15,11 @@
 export OMP_NUM_THREADS=<value>
 export OMP_THREAD_LIMIT=<equal to OMP_NUM_THREADS>
 export OMP_NESTED=TRUE
+
+or
+export KMP_HOT_TEAMS_MODE=1
+export KMP_HOT_TEAMS_MAX_LEVEL=2
+export KMP_PLACE_THREADS = 1T
 export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
 */
 
@@ -37,7 +42,7 @@ export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
 #define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
-//#define OUTPUT //print output?
+#define OUTPUT //print output?
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
@@ -345,13 +350,13 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int entryOctants[8]);
 
 //Function that performs the Euler algorithm on all particles in the set
-void performEulerOperation(int myStart, int myEnd,
-      double (*position)[DIM], double (*oldPosition)[DIM], double (*velocity)[DIM],
+void performEulerOperation(int myStart, int myEnd, int accDisp,
+      double (*position)[DIM], double (*oldPosition)[DIM], double (*acceleration)[DIM], double (*velocity)[DIM],
       double boundaries[6], double timestep);
 
 //Function that performs the Verlet algorithm on all particles in the set
-void performVerletOperation(int myStart, int myEnd, int accDisp, double (*position)[DIM], double (*oldPosition)[DIM],
-      double (*acceleration)[DIM], double boundaries[6], double dtsq);
+void performVerletOperation(int myStart, int myEnd, int accDisp, double (*position)[DIM], double (*oldPositionHolder)[DIM],
+      double (*oldPosition)[DIM], double (*acceleration)[DIM], double boundaries[6], double dtsq);
 
 //Calculates the kinetic energy at the previous time step
 double calcKineticEnergy(int myStart, int myEnd, double (*position)[DIM], double (*oldPosition)[DIM],
@@ -372,8 +377,8 @@ int initializeParticles(double (*position)[DIM], double (*velocity)[DIM],
       int totalParticles, double boundaries[6]);
 
 //Deletes arrays and closes files
-void cleanup(double (*position)[DIM], double (*oldPosition)[DIM],
-      double (*velocity)[DIM], double (*acceleration)[DIM]);
+void cleanup(double (*position)[DIM], double (*velocity)[DIM], double (*acceleration)[DIM], 
+      double (*oldPosition)[DIM]);
 
 //=======================================================================================
 
@@ -475,6 +480,7 @@ int main(int argc, char* argv[])
 	double (*velocity)[DIM] = new double[totalParticles][DIM];
 	double (*oldPosition)[DIM] = new double[totalParticles][DIM];
 	double (*acceleration)[DIM] = new double[totalParticles][DIM];
+      double (*oldPositionHolder)[DIM] = velocity; //Reuse the location for the oldPositionHolder
 
       int errorStatus = 0;
 
@@ -526,8 +532,20 @@ int main(int argc, char* argv[])
       //START SIMULATION
 	auto start_time = std::chrono::high_resolution_clock::now(); //Start the timer
 
-	//Perform initial Euler operation to set things in motion
-      performEulerOperation(myStart, myEnd, position, oldPosition, velocity,
+      #if defined(BARNES_HUT)
+      calcAccelerationBH(acceleration, position, myStart, myEnd, rank, size, numParticlesType1, 
+          energies[1], tree, indices, entryNodes, entryBoundaries, entryOctants);          
+      #elif defined(TILES)
+      calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, 
+            columnStart, columnEnd, targetRank, coord, numParticlesType1, energies[1], boundaries);
+      #else
+      calcAccelerationStrips(acceleration, position, totalParticles, myStart, myEnd,
+             numParticlesType1, energies[1], boundaries);
+      #endif
+   
+	//Perform initial Euler operation to set things in motion, actually a second order Taylor,
+      //not first order Euler.
+      performEulerOperation(myStart, myEnd, accDisp, position, oldPosition, acceleration, velocity,
             boundaries, timestep);
     
 	//Main loop - performing Verlet operations for the remainder of the simulation
@@ -546,7 +564,8 @@ int main(int argc, char* argv[])
                    numParticlesType1, energies[1], boundaries);
             #endif
 
-            performVerletOperation(myStart, myEnd, accDisp, position, oldPosition, acceleration, boundaries, dtsq);
+            performVerletOperation(myStart, myEnd, accDisp, position, oldPositionHolder,
+                  oldPosition, acceleration, boundaries, dtsq);
 
             #ifdef OUTPUT
 		count++;  //Can set print interval arbitrarily
@@ -938,41 +957,43 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
 }
 
 //Function that performs the Euler algorithm on all particles in the set
-void performEulerOperation(int myStart, int myEnd,
-      double (*position)[DIM], double (*oldPosition)[DIM], double (*velocity)[DIM],
+void performEulerOperation(int myStart, int myEnd, int accDisp,
+      double (*position)[DIM], double (*oldPosition)[DIM], double (*acceleration)[DIM], double (*velocity)[DIM],
       double boundaries[6], double timestep)
 {
 	int j;
+      double dtsq = timestep*timestep;
+
+      memcpy(&oldPosition[myStart][0], &position[myStart][0], DIM*sizeof(double)*(myEnd - myStart));      
+
       #pragma omp parallel for private(j)
 	for (int i = myStart; i < myEnd; i++)
 	{
 		for (j = 0; j < DIM; ++j)
 		{                  
-			oldPosition[i][j] = position[i][j];
-			position[i][j] += (velocity[i][j] * timestep);
+			position[i][j] += velocity[i][j] * timestep + 0.5*dtsq*acceleration[accDisp + i][j];
                   applySolidBoundary(position[i][j], oldPosition[i][j], &boundaries[2*j]);
                   //applyPeriodicBoundary(position[i][j], oldPosition[i][j], boundaries[2*j]);
 		}
 	}
 }
 
-void performVerletOperation(int myStart, int myEnd, int accDisp, double (*position)[DIM], double (*oldPosition)[DIM],
-      double (*acceleration)[DIM], double boundaries[6], double dtsq)
+void performVerletOperation(int myStart, int myEnd, int accDisp, double (*position)[DIM], double (*oldPositionHolder)[DIM],
+      double (*oldPosition)[DIM], double (*acceleration)[DIM], double boundaries[6], double dtsq)
 {
-	double currentPosition, futureDisplacement;
 	int j;
-  
-      #pragma omp parallel for private(j, currentPosition, futureDisplacement)
+      int numBytes = DIM*sizeof(double)*(myEnd - myStart);
+
+      memcpy(&oldPositionHolder[myStart][0], &oldPosition[myStart][0], numBytes);
+      memcpy(&oldPosition[myStart][0], &position[myStart][0], numBytes);
+       
+      #pragma omp parallel for private(j)
       for (int i = myStart; i < myEnd; i++)
 	{
 		// Vector Verlet Method
         	for(j = 0; j < DIM; ++j) //Loop over all directions
 		{
-                  futureDisplacement = (position[i][j] - oldPosition[i][j]) + (dtsq * acceleration[accDisp + i][j]);
-			currentPosition = position[i][j];
-			position[i][j] = currentPosition + futureDisplacement;
-			oldPosition[i][j] = currentPosition;
-
+                  position[i][j] += (position[i][j] - oldPositionHolder[i][j]) + (dtsq * acceleration[accDisp + i][j]);
                   applySolidBoundary(position[i][j], oldPosition[i][j], &boundaries[2*j]);
                   //applyPeriodicBoundary(position[i][j], oldPosition[i][j], boundaries[2*j]);
 		}
@@ -1107,8 +1128,8 @@ int initializeParticles(double (*position)[DIM], double (*velocity)[DIM], int to
       return 0;
 }
 
-void cleanup(double (*position)[DIM], double (*oldPosition)[DIM], 
-             double (*velocity)[DIM], double (*acceleration)[DIM])
+void cleanup(double (*position)[DIM], double (*velocity)[DIM], double (*acceleration)[DIM],
+            double (*oldPosition)[DIM])
 {
 	delete [] position;
       delete [] velocity;
