@@ -39,7 +39,7 @@ export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
 #define EMPTY_LEAF -1
 #define BRANCH -2
 
-#define BARNES_HUT //Barnes Hut, tiles, or strips?
+//#define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
 #define OUTPUT //print output?
@@ -75,17 +75,18 @@ struct Node{
 class Tree{
 
       public:
-	      std::vector<Node> nodesArray;
 
-            Tree()
-            {
+      std::vector<Node> nodesArray;
 
-            }
+      Tree()
+      {
 
-            Tree(std::vector<Node> &vec)
-            {
-                  nodesArray = vec;
-            }
+      }
+
+      Tree(std::vector<Node> &vec)
+      {
+            nodesArray = vec;
+      }
 
 	void determineEntryPoints(int nodeIndex, double boundaries[6], int rank, int size,
             std::vector<int> &entryNodes, double entryBoundaries[8][6], int level)
@@ -336,27 +337,29 @@ class Tree{
 //Then calculates the acceleration of each particle based on the force
 //currently applied to it.
 void calcAccelerationStrips(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles,  
-      int myStart, int myEnd, int particlesType1, double &potentialEnergy, double boundaries[6]);
+      int myStart, int myEnd, int particlesType1, double &potentialEnergy, double boundaries[6],
+      MPI_Request &request);
 
 //Tiled version
 void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM], 
       int myStart, int myEnd, int rowStart, int rowEnd, int columnStart, int columnEnd,
-      int targetRank, int coord[2], int particlesType1, double &potentialEnergy, double boundaries[6]);
+      int targetRank, int coord[2], int particlesType1, double &potentialEnergy, double boundaries[6],
+      MPI_Request &request);
 
 //Barnes-Hut version
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
      Tree &tree, std::vector<int> indices[8], std::vector<int> &entryNodes, double entryBoundaries[8][6],
-     int entryOctants[8]);
+     int entryOctants[8], MPI_Request &request);
 
 //Function that performs the Euler algorithm on all particles in the set
 void performEulerOperation(int myStart, int myEnd, int accDisp,
       double (*position)[DIM], double (*oldPosition)[DIM], double (*acceleration)[DIM], double (*velocity)[DIM],
-      double boundaries[6], double timestep);
+      double boundaries[6], double timestep, MPI_Request &request);
 
 //Function that performs the Verlet algorithm on all particles in the set
 void performVerletOperation(int myStart, int myEnd, int accDisp, double (*position)[DIM], double (*oldPositionHolder)[DIM],
-      double (*oldPosition)[DIM], double (*acceleration)[DIM], double boundaries[6], double dtsq);
+      double (*oldPosition)[DIM], double (*acceleration)[DIM], double boundaries[6], double dtsq, MPI_Request &request);
 
 //Calculates the kinetic energy at the previous time step
 double calcKineticEnergy(int myStart, int myEnd, double (*position)[DIM], double (*oldPosition)[DIM],
@@ -400,6 +403,7 @@ int main(int argc, char* argv[])
 
       MPI_Comm_size(MPI_COMM_WORLD, &size);
       MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+      MPI_Request request;
 
       #if defined(TILES)
       if(!(size == 1 || size == 2 || size == 4 || size == 16 || size == 64))
@@ -534,19 +538,19 @@ int main(int argc, char* argv[])
 
       #if defined(BARNES_HUT)
       calcAccelerationBH(acceleration, position, myStart, myEnd, rank, size, numParticlesType1, 
-          energies[1], tree, indices, entryNodes, entryBoundaries, entryOctants);          
+          energies[1], tree, indices, entryNodes, entryBoundaries, entryOctants, request);          
       #elif defined(TILES)
-      calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, 
-            columnStart, columnEnd, targetRank, coord, numParticlesType1, energies[1], boundaries);
+      calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, columnStart, 
+            columnEnd, targetRank, coord, numParticlesType1, energies[1], boundaries, request);
       #else
       calcAccelerationStrips(acceleration, position, totalParticles, myStart, myEnd,
-             numParticlesType1, energies[1], boundaries);
+             numParticlesType1, energies[1], boundaries, request);
       #endif
    
 	//Perform initial Euler operation to set things in motion, actually a second order Taylor,
       //not first order Euler.
       performEulerOperation(myStart, myEnd, accDisp, position, oldPosition, acceleration, velocity,
-            boundaries, timestep);
+            boundaries, timestep, request);
     
 	//Main loop - performing Verlet operations for the remainder of the simulation
 	unsigned count = 0;
@@ -555,17 +559,18 @@ int main(int argc, char* argv[])
             #if defined(BARNES_HUT)
 	      calcAccelerationBH(acceleration, position, myStart, myEnd, rank, size, 
                 numParticlesType1, energies[1], tree, indices, entryNodes, entryBoundaries,
-                entryOctants);
+                entryOctants, request);
             #elif defined(TILES)
             calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, 
-                  columnStart, columnEnd, targetRank, coord, numParticlesType1, energies[1], boundaries);
+                  columnStart, columnEnd, targetRank, coord, numParticlesType1, energies[1],
+                  boundaries, request);
             #else
             calcAccelerationStrips(acceleration, position, totalParticles, myStart, myEnd,
-                   numParticlesType1, energies[1], boundaries);
+                   numParticlesType1, energies[1], boundaries, request);
             #endif
 
             performVerletOperation(myStart, myEnd, accDisp, position, oldPositionHolder,
-                  oldPosition, acceleration, boundaries, dtsq);
+                  oldPosition, acceleration, boundaries, dtsq, request);
 
             #ifdef OUTPUT
 		count++;  //Can set print interval arbitrarily
@@ -612,10 +617,9 @@ int main(int argc, char* argv[])
 //End of main function
 
 void calcAccelerationStrips(double (*acceleration)[DIM], double (*position)[DIM], double totalParticles, 
-      int myStart, int myEnd, int particlesType1, double &potentialEnergy, double boundaries[6])
+      int myStart, int myEnd, int particlesType1, double &potentialEnergy, double boundaries[6], MPI_Request &request)
 {
       int localSize = DIM*(myEnd - myStart);
-      MPI_Request request;
 	MPI_Iallgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, position,
 		localSize, MPI_DOUBLE, MPI_COMM_WORLD, &request);
 
@@ -712,11 +716,10 @@ void calcAccelerationStrips(double (*acceleration)[DIM], double (*position)[DIM]
 
 void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM], 
       int myStart, int myEnd, int rowStart, int rowEnd, int columnStart, int columnEnd,
-      int targetRank, int coord[2], int particlesType1, double &potentialEnergy, double boundaries[6])
+      int targetRank, int coord[2], int particlesType1, double &potentialEnergy, double boundaries[6], MPI_Request &request)
 {
       int localSize = DIM*(myEnd - myStart);
       int groupSize = DIM*(rowEnd - rowStart);
-      MPI_Request requests[2];      
 
       //Gather along the rows
 	MPI_Allgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, &position[rowStart],
@@ -725,12 +728,11 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
       //Point to point communication, it's a transpose!       
       if(coord[0] != coord[1])
       {
-            MPI_Irecv(&position[columnStart], groupSize, MPI_DOUBLE,
-                  MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &requests[0]);
-
-            //MPI_Sendrecv?
             MPI_Isend(&position[rowStart], groupSize, MPI_DOUBLE, 
-                  targetRank, 0, MPI_COMM_WORLD, &requests[1]);      
+                  targetRank, 0, MPI_COMM_WORLD, &request);  
+
+            MPI_Irecv(&position[columnStart], groupSize, MPI_DOUBLE,
+                  MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &request);    
       }      
 
 	double sigma, sigmaPow6, sigmaPow12;
@@ -745,9 +747,8 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
       if(coord[0] != coord[1])
       {
             //Don't need to wait for the send to finish
-            MPI_Wait(&requests[0], MPI_STATUS_IGNORE);
-      }
-      
+            MPI_Wait(&request, MPI_STATUS_IGNORE);
+      }      
 
       //Calculate force
       if(coord[0] == coord[1])
@@ -871,19 +872,18 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
       potentialEnergy = pe;
 
       //Reduce and scatter, send to other processors in same row     
-      MPI_Reduce_scatter_block(MPI_IN_PLACE, &acceleration[rowStart], 
-            localSize, MPI_DOUBLE, MPI_SUM, COMM_ROW);  
+      MPI_Ireduce_scatter_block(MPI_IN_PLACE, &acceleration[rowStart], 
+            localSize, MPI_DOUBLE, MPI_SUM, COMM_ROW, &request);  
 }
 
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
      int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
      Tree &tree, std::vector<int> indices[8], std::vector<int> &entryNodes, double entryBoundaries[8][6], 
-     int entryOctants[8])
+     int entryOctants[8], MPI_Request &request)
 {                
       int localParticles = myEnd - myStart;
       int localSize = DIM*localParticles;
         
-      MPI_Request request;
 	MPI_Iallgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, position, 
             localSize, MPI_DOUBLE, MPI_COMM_WORLD, &request);
 
@@ -950,21 +950,23 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
       }
       potentialEnergy = pe;
 
-      //could use non-blocking here, but there isn't a whole lot of work to do
-      //before the information is needed.
-      MPI_Reduce_scatter_block(MPI_IN_PLACE, acceleration, 
-            localSize, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);          
+      MPI_Ireduce_scatter_block(MPI_IN_PLACE, acceleration, 
+            localSize, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD, &request);          
 }
 
 //Function that performs the Euler algorithm on all particles in the set
 void performEulerOperation(int myStart, int myEnd, int accDisp,
       double (*position)[DIM], double (*oldPosition)[DIM], double (*acceleration)[DIM], double (*velocity)[DIM],
-      double boundaries[6], double timestep)
+      double boundaries[6], double timestep, MPI_Request &request)
 {
 	int j;
       double dtsq = timestep*timestep;
 
-      memcpy(&oldPosition[myStart][0], &position[myStart][0], DIM*sizeof(double)*(myEnd - myStart));      
+      memcpy(&oldPosition[myStart][0], &position[myStart][0], DIM*sizeof(double)*(myEnd - myStart));   
+
+      #if defined(BARNES_HUT) || defined (TILES)
+      MPI_Wait(&request, MPI_STATUS_IGNORE);
+      #endif   
 
       #pragma omp parallel for private(j)
 	for (int i = myStart; i < myEnd; i++)
@@ -979,13 +981,17 @@ void performEulerOperation(int myStart, int myEnd, int accDisp,
 }
 
 void performVerletOperation(int myStart, int myEnd, int accDisp, double (*position)[DIM], double (*oldPositionHolder)[DIM],
-      double (*oldPosition)[DIM], double (*acceleration)[DIM], double boundaries[6], double dtsq)
+      double (*oldPosition)[DIM], double (*acceleration)[DIM], double boundaries[6], double dtsq, MPI_Request &request)
 {
 	int j;
       int numBytes = DIM*sizeof(double)*(myEnd - myStart);
 
       memcpy(&oldPositionHolder[myStart][0], &oldPosition[myStart][0], numBytes);
       memcpy(&oldPosition[myStart][0], &position[myStart][0], numBytes);
+
+      #if defined(BARNES_HUT) || defined (TILES)
+      MPI_Wait(&request, MPI_STATUS_IGNORE);
+      #endif
        
       #pragma omp parallel for private(j)
       for (int i = myStart; i < myEnd; i++)
