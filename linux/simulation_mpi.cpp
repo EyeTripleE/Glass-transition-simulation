@@ -193,7 +193,7 @@ class Tree{
 		{
 			nodesArray[nodeIndex].particleIndex = partIndices[0];
 			//Assume equivalent mass, otherwise will need to modify
-			nodesArray[nodeIndex].mass = 1.0f;
+			nodesArray[nodeIndex].mass = 1.0;
                   memcpy(&(nodesArray[nodeIndex].com[0]), &position[partIndices[0]][0], DIM*sizeof(double));	
 		}
 		else
@@ -296,10 +296,10 @@ class Tree{
                         pythagorean += vectors[i]*vectors[i];
                   }
 
-                  float s = nodesArray[nodeIndex].mass/sqrt((float)pythagorean);
+                  double s = nodesArray[nodeIndex].mass/sqrt(pythagorean);
 
                   //The higher the s value, the less stable the energy is.
-                  if(nodesArray[nodeIndex].particleIndex >= 0 || s < 0.5f) //Calculate force
+                  if(nodesArray[nodeIndex].particleIndex >= 0 || s < 0.5) //Calculate force
                   {
 		            //Force derived from Lennard-Jones potential
                         //Guessing this should be an average of sigma values of all involved particles. Since only using type 1 just set to one here.     
@@ -869,11 +869,11 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 		      }
             }
       }
-      potentialEnergy = pe;
-
       //Reduce and scatter, send to other processors in same row     
       MPI_Ireduce_scatter_block(MPI_IN_PLACE, &acceleration[rowStart], 
             localSize, MPI_DOUBLE, MPI_SUM, COMM_ROW, &request);  
+
+      potentialEnergy = pe;
 }
 
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
@@ -948,10 +948,11 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
                   tree.calcAcc(entryNodes[j], i, position[i], acceleration[i], pe);
             }
       }
-      potentialEnergy = pe;
 
       MPI_Ireduce_scatter_block(MPI_IN_PLACE, acceleration, 
-            localSize, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD, &request);          
+            localSize, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD, &request); 
+
+      potentialEnergy = pe;         
 }
 
 //Function that performs the Euler algorithm on all particles in the set
