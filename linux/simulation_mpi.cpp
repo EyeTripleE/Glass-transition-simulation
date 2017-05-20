@@ -39,7 +39,7 @@ export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
 #define EMPTY_LEAF -1
 #define BRANCH -2
 
-//#define BARNES_HUT //Barnes Hut, tiles, or strips?
+#define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
 #define CUTOFF //If strips, use cutoff distance or not?
 #define OUTPUT //print output?
@@ -181,36 +181,34 @@ public:
         //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
         //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
 
-        if(nodeIndex >= nodesArray.size())
-        {
-            #pragma omp critical //Not thread safe
-            nodesArray.resize(nodeIndex + 1);
-        }
+        //#pragma omp critical
+         {
+           if(nodeIndex >= nodesArray.size()) //If this is interrupted, size may be wrong
+           {
+               //Aquire all write locks, Aquire the resize lock
+               nodesArray.resize(nodeIndex + 1); //If another process resizes while another process accesses, program will crash
+               //Do not access if any threads in marked sections.
+           }
+         }
 
         if(partIndices.size() == 0)
         {
+            //Test resize lock
             nodesArray[nodeIndex].particleIndex = EMPTY_LEAF;
         }
         else if(partIndices.size() == 1)
         {
+            //Test would work, but don't want resize to interrupt
+            //Aquire would work, but don't want other threads to stop
             nodesArray[nodeIndex].particleIndex = partIndices[0];
-            //Assume equivalent mass, otherwise will need to modify
-            nodesArray[nodeIndex].mass = 1.0f;
+            nodesArray[nodeIndex].mass = 1.0f; //Assume equivalent mass, otherwise will need to modify
             memcpy(&(nodesArray[nodeIndex].com[0]), &position[partIndices[0]][0], DIM*sizeof(double));
         }
         else
         {
-            //Assuming mass of one, sum mass
-            nodesArray[nodeIndex].particleIndex = BRANCH;
-            nodesArray[nodeIndex].mass = partIndices.size();
-
             //Assuming mass of one per particle, average location
-            //Zero out center of mass
-            memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
-
             //Calculate the center of mass
             int index;
-
             double com0 = 0.0;
             double com1 = 0.0;
             double com2 = 0.0;
@@ -225,12 +223,20 @@ public:
                 //Same as com1 if DIM == 2, messes up vectorization for two dimensions
                 com2 += position[index][DIM - 1];
             }
-            nodesArray[nodeIndex].com[0] = com0;
-            nodesArray[nodeIndex].com[1] = com1;
-            nodesArray[nodeIndex].com[DIM - 1] = com2;
+            double invSize = 1.0/partIndices.size();
 
-            //Old code for calculating COM
+            //Test resize lock
+            nodesArray[nodeIndex].com[0] = com0*invSize;
+            nodesArray[nodeIndex].com[1] = com1*invSize;
+            nodesArray[nodeIndex].com[DIM - 1] = com2*invSize;
+            nodesArray[nodeIndex].particleIndex = BRANCH;
+            nodesArray[nodeIndex].mass = partIndices.size(); //Assuming mass of one, sum mass
+
             /*
+            //Old code for calculating COM
+            //Zero out center of mass
+            memset(nodesArray[nodeIndex].com, 0, DIM*sizeof(double));
+            
             int j;
             for(int i = 0; i < partIndices.size(); i++)
             {
@@ -240,13 +246,14 @@ public:
                         nodesArray[nodeIndex].com[j] += position[index][j];
                   }
             }
-            */
+            
 
             double invSize = 1.0/partIndices.size();
             for(int i = 0; i < DIM; i++)
             {
                 nodesArray[nodeIndex].com[i] *= invSize;
             }
+            */
 
             //Create new boundaries
             double halves[3] = {0.5*(boundaries[0] + boundaries[1]),
@@ -278,7 +285,7 @@ public:
                 indicesArray[childOctant].push_back(partIndices[i]);
             }
 
-            #pragma omp parallel for
+            //#pragma omp parallel for
             for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
             {
                 buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], childBoundaries[i]);
@@ -286,47 +293,75 @@ public:
         }
     }
 
-
-    void calcAcc(int nodeIndex, int partIndex, double myPosition[DIM], double acceleration[DIM], double &potentialEnergy)
+    void calcAcc(int nodeIndex, std::vector<int> &indices, double (*position)[DIM], double (*acceleration)[DIM], double &potentialEnergy)
     {
-        //Empty square or itself, do nothing
-        if(nodesArray[nodeIndex].particleIndex != EMPTY_LEAF && nodesArray[nodeIndex].particleIndex != partIndex)
+        //Ensure we are not at bottom of tree and we still have particles to work with
+        if(indices.size() > 0 && nodesArray[nodeIndex].particleIndex != EMPTY_LEAF)
         {
+            //Create vector for the next recursion level
+            std::vector<int> indicesForChildren;
+
+            //Initialize variables for use in loop
             double vectors[DIM];
-            double pythagorean = 0.0;
-            for(int i = 0; i < DIM; i++)
+            double sigma, sigmaPow6, sigmaPow12;
+            double invPy, invPyPow3, invPyPow4, invPyPow6;
+            double forceCoeff, pythagorean, force;
+            double cutoff_sq = 0.5*0.5;
+            float mass_sq;
+            int j, k, index;
+
+            //Look at all my particles
+            for(int i = 0; i < indices.size(); i++) //This is difficult to vectorize unless particles are arranged in spatial order
             {
-                vectors[i] = determineVectorFlat(myPosition[i], nodesArray[nodeIndex].com[i]);
-                pythagorean += vectors[i]*vectors[i];
+               index = indices[i];
+               //If I have arrived at myself, there is nothing to do, otherwise continue
+               if(nodesArray[nodeIndex].particleIndex != index) //This is probably expensive
+               {
+                  pythagorean = 0.0;
+                  for(j = 0; j < DIM; j++)
+                  {
+                      vectors[j] = determineVectorFlat(position[index][j], nodesArray[nodeIndex].com[j]);
+                      pythagorean += vectors[j]*vectors[j];
+                  }
+
+                  mass_sq = nodesArray[nodeIndex].mass*nodesArray[nodeIndex].mass;               
+
+                  //The higher the s value, the less stable the energy is.
+                  if(mass_sq < cutoff_sq*pythagorean || nodesArray[nodeIndex].particleIndex >= 0) //Calculate force
+                  {
+                      //Guessing this should be an average of sigma values of all involved particles. Since only using type 1 just set to one here.
+                      sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);
+                      sigmaPow6 = sigma*sigma;//Use sigmaPow6 as to hold the square temporarily
+                      sigmaPow6 = sigmaPow6*sigmaPow6*sigmaPow6;
+                      sigmaPow12 = sigmaPow6*sigmaPow6;
+                      invPy = 1.0 / pythagorean;
+                      invPyPow3 = invPy*invPy*invPy;
+                      invPyPow4 = invPyPow3*invPy;
+                      invPyPow6 = invPyPow3*invPyPow3;
+                      potentialEnergy += 2.0 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
+                      forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);
+
+                      for(k = 0; k < DIM; k++)
+                      {
+                          force = vectors[k]*forceCoeff;
+                          #pragma omp atomic update //Sibling nodes could try to update
+                          acceleration[index][k] += force;
+                      }
+                  }
+                  else //Add to vectors for child nodes
+                  {
+                     indicesForChildren.push_back(index);
+                  }
+               }
             }
 
-            double s = nodesArray[nodeIndex].mass/sqrt(pythagorean);
+            //Recurse to children
+            double childPE = 0.0;
+            #pragma omp parallel for reduction(+:childPE)
+            for(int i = 0; i < 8; i++)
+               calcAcc(8*nodeIndex + (i + 1), indicesForChildren, position, acceleration, childPE);
 
-            //The higher the s value, the less stable the energy is.
-            if(nodesArray[nodeIndex].particleIndex >= 0 || s < 0.5) //Calculate force
-            {
-                //Force derived from Lennard-Jones potential
-                //Guessing this should be an average of sigma values of all involved particles. Since only using type 1 just set to one here.
-                double sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);
-                double sigmaPow6 = sigma*sigma;//Use sigmaPow6 as to hold the square temporarily
-                sigmaPow6 = sigmaPow6*sigmaPow6*sigmaPow6;
-                double sigmaPow12 = sigmaPow6*sigmaPow6;
-                double invPy = 1.0 / pythagorean;
-                double invPyPow3 = invPy*invPy*invPy;
-                double invPyPow4 = invPyPow3*invPy;
-                double invPyPow6 = invPyPow3*invPyPow3;
-                double forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);
-
-                for(int k = 0; k < DIM; k++)
-                    acceleration[k] += vectors[k]*forceCoeff;
-
-                potentialEnergy += 2.0 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
-            }
-            else //Check children
-            {
-                for(int i = 0; i < 8; i++)
-                    calcAcc(8*nodeIndex + (i + 1), partIndex, myPosition, acceleration, potentialEnergy);
-            }
+            potentialEnergy += childPE;            
         }
     }
 
@@ -353,8 +388,8 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 //Barnes-Hut version
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
                         int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
-                        Tree &tree, std::vector<int> indices[8], std::vector<int> &entryNodes, double entryBoundaries[8][6],
-                        int entryOctants[8], MPI_Request &request);
+                        Tree &tree, std::vector<int> indices[8], std::vector<int> &allIndices, std::vector<int> &entryNodes,
+                        double entryBoundaries[8][6], int entryOctants[8], MPI_Request &request);
 
 //Function that performs the Euler algorithm on all particles in the set
 void performEulerOperation(int myStart, int myEnd, int accDisp,
@@ -472,7 +507,7 @@ int main(int argc, char* argv[])
 
     //Set time related variables
     double timestep = 0.005; //Can be arbitrarily small
-    double maxTime = 10; //Can be arbitrarily long or short
+    double maxTime = 5; //Can be arbitrarily long or short
     double invTimestep = 1.0/timestep; //needed for KE
     double dtsq = timestep*timestep;
     double currentTime = 0;
@@ -531,6 +566,9 @@ int main(int argc, char* argv[])
     int entryOctants[8];
     for(int i = 0; i < entryNodes.size(); i++)
         entryOctants[i] = entryNodes[i] - ((((entryNodes[i] - 1) / 8 ) * 8) + 1);
+    std::vector<int> allIndices;
+    for(int i = 0; i < totalParticles; i++)
+        allIndices.push_back(i);
 #else
     int accDisp = 0;
 #endif
@@ -541,8 +579,8 @@ int main(int argc, char* argv[])
     auto start_time = std::chrono::high_resolution_clock::now(); //Start the timer
 
 #if defined(BARNES_HUT)
-    calcAccelerationBH(acceleration, position, myStart, myEnd, rank, size, numParticlesType1,
-                       energies[1], tree, indices, entryNodes, entryBoundaries, entryOctants, request);
+    calcAccelerationBH(acceleration, position, myStart, myEnd, rank, size, numParticlesType1, energies[1],
+                       tree, indices, allIndices, entryNodes, entryBoundaries, entryOctants, request);
 #elif defined(TILES)
     calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, columnStart,
                           columnEnd, targetRank, coord, numParticlesType1, energies[1], boundaries, request);
@@ -562,8 +600,8 @@ int main(int argc, char* argv[])
     {
 #if defined(BARNES_HUT)
         calcAccelerationBH(acceleration, position, myStart, myEnd, rank, size,
-                           numParticlesType1, energies[1], tree, indices, entryNodes, entryBoundaries,
-                           entryOctants, request);
+                           numParticlesType1, energies[1], tree, indices, allIndices, entryNodes,
+                           entryBoundaries, entryOctants, request);
 #elif defined(TILES)
         calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd,
                               columnStart, columnEnd, targetRank, coord, numParticlesType1, energies[1],
@@ -664,14 +702,13 @@ void calcAccelerationStrips(double (*acceleration)[DIM], double (*position)[DIM]
                 invPyPow3 = invPy*invPy*invPy;
                 invPyPow4 = invPyPow3*invPy;
                 invPyPow6 = invPyPow3*invPyPow3;
+                pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
                 forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);
 
                 for(k = 0; k < DIM; k++)
                 {
                     acceleration[i][k] += vectors[k]*forceCoeff;
                 }
-
-                pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
             }
         }
         for (j = i + 1; j < totalParticles; j++)
@@ -697,14 +734,13 @@ void calcAccelerationStrips(double (*acceleration)[DIM], double (*position)[DIM]
                 invPyPow3 = invPy*invPy*invPy;
                 invPyPow4 = invPyPow3*invPy;
                 invPyPow6 = invPyPow3*invPyPow3;
+                pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
                 forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);
 
                 for(k = 0; k < DIM; k++)
                 {
                     acceleration[i][k] += vectors[k]*forceCoeff;
                 }
-
-                pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
             }
         }
     }
@@ -724,6 +760,7 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 {
     int localSize = DIM*(myEnd - myStart);
     int groupSize = DIM*(rowEnd - rowStart);
+    MPI_Request temp;
 
     //Gather along the rows
     MPI_Allgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, &position[rowStart],
@@ -733,7 +770,7 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
     if(coord[0] != coord[1])
     {
         MPI_Isend(&position[rowStart], groupSize, MPI_DOUBLE,
-                  targetRank, 0, MPI_COMM_WORLD, &request);
+                  targetRank, 0, MPI_COMM_WORLD, &temp);
 
         MPI_Irecv(&position[columnStart], groupSize, MPI_DOUBLE,
                   MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &request);
@@ -784,14 +821,13 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
                     invPyPow3 = invPy*invPy*invPy;
                     invPyPow4 = invPyPow3*invPy;
                     invPyPow6 = invPyPow3*invPyPow3;
+                    pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
                     forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);
 
                     for(k = 0; k < DIM; k++)
                     {
                         acceleration[i][k] += vectors[k]*forceCoeff;
                     }
-
-                    pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
                 }
             }
             for (j = i + 1; j < columnEnd; j++)
@@ -818,14 +854,13 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
                     invPyPow3 = invPy*invPy*invPy;
                     invPyPow4 = invPyPow3*invPy;
                     invPyPow6 = invPyPow3*invPyPow3;
+                    pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
                     forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);
 
                     for(k = 0; k < DIM; k++)
                     {
                         acceleration[i][k] += vectors[k]*forceCoeff;
                     }
-
-                    pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
                 }
             }
         }
@@ -861,14 +896,13 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
                     invPyPow3 = invPy*invPy*invPy;
                     invPyPow4 = invPyPow3*invPy;
                     invPyPow6 = invPyPow3*invPyPow3;
+                    pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
                     forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);
 
                     for(k = 0; k < DIM; k++)
                     {
                         acceleration[i][k] += vectors[k]*forceCoeff;
                     }
-
-                    pe += 2 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
                 }
             }
         }
@@ -882,8 +916,8 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
 
 void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
                         int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
-                        Tree &tree, std::vector<int> indices[8], std::vector<int> &entryNodes, double entryBoundaries[8][6],
-                        int entryOctants[8], MPI_Request &request)
+                        Tree &tree, std::vector<int> indices[8], std::vector<int> &allIndices, std::vector<int> &entryNodes,
+                        double entryBoundaries[8][6], int entryOctants[8], MPI_Request &request)
 {
     int localParticles = myEnd - myStart;
     int localSize = DIM*localParticles;
@@ -902,18 +936,18 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
     bool inside;
     int j, k;
 
-    MPI_Wait(&request, MPI_STATUS_IGNORE);
-
-    //Maybe overlap the tree building and communication? How?
-
-    //Loop over particles and add it to the corresponding list of particles
-    //if it is inside one of my octants
-
     for(int i = 0; i < entryNodes.size(); i++)
     {
         indices[i].clear();
     }
 
+    MPI_Wait(&request, MPI_STATUS_IGNORE);
+
+    //Maybe overlap the tree building and communication? How?
+    //Not necessary. Tree building is not a significant cost.
+
+    //Loop over particles and add it to the corresponding list of particles
+    //if it is inside one of my octants
     #pragma omp parallel for private(j, inside, k)
     for(int i = 0; i < totalParticles; i++)
     {
@@ -940,24 +974,21 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
         }
     }
 
-    for(int i = 0; i < entryNodes.size(); i++)
-    {
-        tree.buildTree(entryNodes[i], position, indices[i], entryBoundaries[entryOctants[i]]);
-    }
+   //#pragma omp parallel for //Not thread safe due to overlapping resizes and writes
+   for(int i = 0; i < entryNodes.size(); i++)
+   {
+      tree.buildTree(entryNodes[i], position, indices[i], entryBoundaries[entryOctants[i]]);
+   }
+   #pragma omp parallel for reduction(+:pe) //Can't do in above loop because tree resizes 
+   for(int i = 0; i < entryNodes.size(); i++)
+   {
+      tree.calcAcc(entryNodes[i], allIndices, position, acceleration, pe);
+   }
 
-    #pragma omp parallel for reduction(+:pe) private(j)
-    for(int i = 0; i < totalParticles; i++)
-    {
-        for(j = 0; j < entryNodes.size(); j++)
-        {
-            tree.calcAcc(entryNodes[j], i, position[i], acceleration[i], pe);
-        }
-    }
+   MPI_Ireduce_scatter_block(MPI_IN_PLACE, acceleration,
+                           localSize, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD, &request);
 
-    MPI_Ireduce_scatter_block(MPI_IN_PLACE, acceleration,
-                              localSize, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD, &request);
-
-    potentialEnergy = pe;
+   potentialEnergy = pe;
 }
 
 //Function that performs the Euler algorithm on all particles in the set
