@@ -181,56 +181,103 @@ public:
         //printf("Node index: %d, Number of particles: %ld, Boundaries: %g %g %g %g %g %g\n", nodeIndex, partIndices.size(),
         //      boundaries[0], boundaries[1], boundaries[2],boundaries[3],boundaries[4],boundaries[5]);
 
+        //If there aren't any writers, increment resizers
         //#pragma omp critical
-         {
-           if(nodeIndex >= nodesArray.size()) //If this is interrupted, size may be wrong
-           {
-               //Aquire all write locks, Aquire the resize lock
-               nodesArray.resize(nodeIndex + 1); //If another process resizes while another process accesses, program will crash
-               //Do not access if any threads in marked sections.
-           }
-         }
+        //{
+        //   while(numWriters != 0 && numResizers != 0){printf("here1\n");};//Wait until the number of writers and resizers is zero
+        //   numResizers++;  //Increment resizers.
+        //}
+        //If another process resizes while another thread accesses, program will crash
+
+        #pragma omp critical
+        if(nodeIndex >= nodesArray.size()) nodesArray.resize(nodeIndex + 1);
+
+        //numResizers--; //Decrement resizers. Shouldn't need to be atomic because only one thread can modify at a time
 
         if(partIndices.size() == 0)
         {
-            //Test resize lock
+            /*
+            #pragma omp critical
+            {               
+               while(numResizers != 0){printf("here2\n");}; //Wait until the number of resizers is zero
+               #pragma omp atomic
+               numWriters++;  //Increment writers. These two operations must happen atomically
+            }
+            */
+
+            #pragma omp critical
             nodesArray[nodeIndex].particleIndex = EMPTY_LEAF;
+
+            /*
+            #pragma omp atomic
+            numWriters--; //Decrement writers
+            */
         }
         else if(partIndices.size() == 1)
         {
-            //Test would work, but don't want resize to interrupt
-            //Aquire would work, but don't want other threads to stop
+            /*
+            #pragma omp critical //This basically makes it serial, might as well just 
+            //do a critical section around the writes if doing this.
+            {               
+               while(numResizers != 0){
+               printf("here3\n");}; //Wait until the number of resizers is zero
+               #pragma omp atomic
+               numWriters++;  //Increment writers. These two operations must happen atomically
+            }
+            */
+            #pragma omp critical
+            {
             nodesArray[nodeIndex].particleIndex = partIndices[0];
             nodesArray[nodeIndex].mass = 1.0f; //Assume equivalent mass, otherwise will need to modify
             memcpy(&(nodesArray[nodeIndex].com[0]), &position[partIndices[0]][0], DIM*sizeof(double));
+            }
+            /*
+            #pragma omp atomic
+            numWriters--; //Decrement writers
+            */
         }
         else
         {
             //Assuming mass of one per particle, average location
             //Calculate the center of mass
-            int index;
             double com0 = 0.0;
             double com1 = 0.0;
             double com2 = 0.0;
 
             //With OpenMP 4.0 an array (com[3]) could be reduced. Until then...
-            #pragma omp parallel for reduction(+:com0, com1, com2) private(index)
+            #pragma omp parallel for reduction(+:com0, com1, com2)
             for(int i = 0; i < partIndices.size(); i++)
             {
-                index = partIndices[i];
-                com0 += position[index][0];
-                com1 += position[index][1];
-                //Same as com1 if DIM == 2, messes up vectorization for two dimensions
-                com2 += position[index][DIM - 1];
+                com0 += position[partIndices[i]][0];
+                com1 += position[partIndices[i]][1];
+                com2 += position[partIndices[i]][DIM - 1]; //Same as com1 if DIM == 2, messes up vectorization for two dimensions
             }
             double invSize = 1.0/partIndices.size();
 
-            //Test resize lock
+            /*
+            #pragma omp critical
+            {               
+               while(numResizers != 0){
+               printf("here4\n");
+               }; //Wait until the number of resizers is zero
+               #pragma omp atomic
+               numWriters++;  //Increment writers. These two operations must happen atomically
+            }
+            */
+
+            #pragma omp critical
+            {
             nodesArray[nodeIndex].com[0] = com0*invSize;
             nodesArray[nodeIndex].com[1] = com1*invSize;
             nodesArray[nodeIndex].com[DIM - 1] = com2*invSize;
             nodesArray[nodeIndex].particleIndex = BRANCH;
             nodesArray[nodeIndex].mass = partIndices.size(); //Assuming mass of one, sum mass
+            }
+
+            /*
+            #pragma omp atomic
+            numWriters--; //Decrement writers
+            */
 
             /*
             //Old code for calculating COM
@@ -245,8 +292,7 @@ public:
                   {
                         nodesArray[nodeIndex].com[j] += position[index][j];
                   }
-            }
-            
+            }            
 
             double invSize = 1.0/partIndices.size();
             for(int i = 0; i < DIM; i++)
@@ -285,7 +331,7 @@ public:
                 indicesArray[childOctant].push_back(partIndices[i]);
             }
 
-            //#pragma omp parallel for
+            #pragma omp parallel for
             for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
             {
                 buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], childBoundaries[i]);
@@ -974,7 +1020,7 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
         }
     }
 
-   //#pragma omp parallel for //Not thread safe due to overlapping resizes and writes
+   #pragma omp parallel for //Not thread safe due to overlapping resizes and writes
    for(int i = 0; i < entryNodes.size(); i++)
    {
       tree.buildTree(entryNodes[i], position, indices[i], entryBoundaries[entryOctants[i]]);
