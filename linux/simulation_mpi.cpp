@@ -36,8 +36,9 @@ export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
 #include "assert.h"
 
 #define DIM 3
-#define EMPTY_LEAF -1
-#define BRANCH -2
+#define LEAF 0
+#define EMPTY_LEAF 1
+#define BRANCH 2
 
 #define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
@@ -62,7 +63,7 @@ inline double determineVectorFlat(const double p1Pos, const double p2Pos)
 //===================================BEGIN TREE STUFF=========================================
 
 struct Node {
-    int particleIndex;
+    char nodeType;
     float mass;
     double com[DIM];
     //double myBoundaries[6];
@@ -160,21 +161,54 @@ public:
         {
             //This is only done once so it doesn't matter that unneeded information is copied
             memcpy(entryBoundaries, childBoundaries, 8*6*sizeof(double));
-            //We have found the split point, recursion terminates
+            //We have found the split point, recursion terminates     
+
+            
+            //How many processes are on my branch?    
+            int pob = size / levelNodes; //Processes on branch
+            if(index < size % levelNodes) pob++; //Distribute the remainder          
+            
+            //What is my rank relative to other processes on branch 
+            int brank = rank / levelNodes;//branch rank
+
+            int bpp = 8 / pob; //Branch per process
+            int r = 8 % pob;
+
+            int start;
+            if(brank < r)
+            {
+               bpp++;
+               start = brank*bpp;
+            }
+            else
+            {
+               start = r*(bpp + 1) + (brank - r)*bpp;
+            }                    
+            
+            int entryIndex;
+            for(int i = start + bpp - 1; i >= start; i--)
+            {
+                printf("%d\n", i);       
+                entryIndex = 8*nodeIndex + (i + 1);
+                entryNodes.push_back(entryIndex);            
+            }           
+            
+            /*
             int stride = size / levelNodes;
             //Dole out the remainder
             if(index < size % levelNodes) stride += 1;
             int entryIndex;
-
+            
             for(int i = 7 - index; i >= 0; i -= stride)
             {
                 entryIndex = 8*nodeIndex + (i + 1);
                 entryNodes.push_back(entryIndex);
             }
+            */          
         }
     }
 
-    void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double boundaries[6])
+    void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double boundaries[6], std::vector<int> &keys)
     {
         //if(rank == 0) printf("here %d\n", nodeIndex);
         //printf("here %d\n", nodeIndex);
@@ -206,7 +240,7 @@ public:
             */
 
             #pragma omp critical
-            nodesArray[nodeIndex].particleIndex = EMPTY_LEAF;
+            nodesArray[nodeIndex].nodeType = EMPTY_LEAF;
 
             /*
             #pragma omp atomic
@@ -227,9 +261,10 @@ public:
             */
             #pragma omp critical
             {
-            nodesArray[nodeIndex].particleIndex = partIndices[0];
+            nodesArray[nodeIndex].nodeType = LEAF;
             nodesArray[nodeIndex].mass = 1.0f; //Assume equivalent mass, otherwise will need to modify
             memcpy(&(nodesArray[nodeIndex].com[0]), &position[partIndices[0]][0], DIM*sizeof(double));
+            keys.push_back(partIndices[0]);
             }
             /*
             #pragma omp atomic
@@ -270,7 +305,7 @@ public:
             nodesArray[nodeIndex].com[0] = com0*invSize;
             nodesArray[nodeIndex].com[1] = com1*invSize;
             nodesArray[nodeIndex].com[DIM - 1] = com2*invSize;
-            nodesArray[nodeIndex].particleIndex = BRANCH;
+            nodesArray[nodeIndex].nodeType = BRANCH;
             nodesArray[nodeIndex].mass = partIndices.size(); //Assuming mass of one, sum mass
             }
 
@@ -324,7 +359,7 @@ public:
             int childOctant;
             for(int i = 0; i < partIndices.size(); i++)
             {
-                //Breaks with if statement for some reason
+                //Have to zero out each iteration if using if statement
                 childOctant = position[partIndices[i]][0] > halves[0] ? 4 : 0;
                 if(position[partIndices[i]][1] > halves[1]) childOctant |= 2;
                 if(position[partIndices[i]][2] > halves[2]) childOctant |= 1;
@@ -334,7 +369,7 @@ public:
             #pragma omp parallel for
             for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
             {
-                buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], childBoundaries[i]);
+                buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], childBoundaries[i], keys);
             }
         }
     }
@@ -342,7 +377,7 @@ public:
     void calcAcc(int nodeIndex, std::vector<int> &indices, double (*position)[DIM], double (*acceleration)[DIM], double &potentialEnergy)
     {
         //Ensure we are not at bottom of tree and we still have particles to work with
-        if(indices.size() > 0 && nodesArray[nodeIndex].particleIndex != EMPTY_LEAF)
+        if(indices.size() > 0 && nodesArray[nodeIndex].nodeType != EMPTY_LEAF)
         {
             //Create vector for the next recursion level
             std::vector<int> indicesForChildren;
@@ -360,44 +395,40 @@ public:
             for(int i = 0; i < indices.size(); i++) //This is difficult to vectorize unless particles are arranged in spatial order
             {
                index = indices[i];
-               //If I have arrived at myself, there is nothing to do, otherwise continue
-               if(nodesArray[nodeIndex].particleIndex != index) //This is probably expensive
+               pythagorean = 0.0;
+               for(j = 0; j < DIM; j++)
                {
-                  pythagorean = 0.0;
-                  for(j = 0; j < DIM; j++)
-                  {
-                      vectors[j] = determineVectorFlat(position[index][j], nodesArray[nodeIndex].com[j]);
-                      pythagorean += vectors[j]*vectors[j];
-                  }
+                   vectors[j] = determineVectorFlat(position[index][j], nodesArray[nodeIndex].com[j]);
+                   pythagorean += vectors[j]*vectors[j];
+               }
 
-                  mass_sq = nodesArray[nodeIndex].mass*nodesArray[nodeIndex].mass;               
+               mass_sq = nodesArray[nodeIndex].mass*nodesArray[nodeIndex].mass;               
 
-                  //The higher the s value, the less stable the energy is.
-                  if(mass_sq < cutoff_sq*pythagorean || nodesArray[nodeIndex].particleIndex >= 0) //Calculate force
-                  {
-                      //Guessing this should be an average of sigma values of all involved particles. Since only using type 1 just set to one here.
-                      sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);
-                      sigmaPow6 = sigma*sigma;//Use sigmaPow6 as to hold the square temporarily
-                      sigmaPow6 = sigmaPow6*sigmaPow6*sigmaPow6;
-                      sigmaPow12 = sigmaPow6*sigmaPow6;
-                      invPy = 1.0 / pythagorean;
-                      invPyPow3 = invPy*invPy*invPy;
-                      invPyPow4 = invPyPow3*invPy;
-                      invPyPow6 = invPyPow3*invPyPow3;
-                      potentialEnergy += 2.0 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
-                      forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);
+               //The higher the s value, the less stable the energy is. If pythagorean == 0.0 then particle is looking at itself
+               if(mass_sq < cutoff_sq*pythagorean || (nodesArray[nodeIndex].nodeType == LEAF && pythagorean != 0.0)) //Calculate force
+               {
+                   //Guessing this should be an average of sigma values of all involved particles. Since only using type 1 just set to one here.
+                   sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);
+                   sigmaPow6 = sigma*sigma;//Use sigmaPow6 as to hold the square temporarily
+                   sigmaPow6 = sigmaPow6*sigmaPow6*sigmaPow6;
+                   sigmaPow12 = sigmaPow6*sigmaPow6;
+                   invPy = 1.0 / pythagorean;
+                   invPyPow3 = invPy*invPy*invPy;
+                   invPyPow4 = invPyPow3*invPy;
+                   invPyPow6 = invPyPow3*invPyPow3;
+                   potentialEnergy += 2.0 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
+                   forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);
 
-                      for(k = 0; k < DIM; k++)
-                      {
-                          force = vectors[k]*forceCoeff;
-                          #pragma omp atomic update //Sibling nodes could try to update
-                          acceleration[index][k] += force;
-                      }
-                  }
-                  else //Add to vectors for child nodes
-                  {
-                     indicesForChildren.push_back(index);
-                  }
+                   for(k = 0; k < DIM; k++)
+                   {
+                       force = vectors[k]*forceCoeff;
+                       #pragma omp atomic update //Sibling nodes could try to update
+                       acceleration[index][k] += force;
+                   }
+               }
+               else if(pythagorean != 0) //Add to vectors for child nodes
+               {
+                  indicesForChildren.push_back(index);
                }
             }
 
@@ -1020,11 +1051,19 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
         }
     }
 
+   std::vector<int> keys;
+   keys.reserve(totalParticles);
+
    #pragma omp parallel for //Not thread safe due to overlapping resizes and writes
    for(int i = 0; i < entryNodes.size(); i++)
    {
-      tree.buildTree(entryNodes[i], position, indices[i], entryBoundaries[entryOctants[i]]);
+      tree.buildTree(entryNodes[i], position, indices[i], entryBoundaries[entryOctants[i]], keys);
    }
+
+   //Traverse the tree and sort the particles here
+
+   //What about the velocity? Sort old data 
+
    #pragma omp parallel for reduction(+:pe) //Can't do in above loop because tree resizes 
    for(int i = 0; i < entryNodes.size(); i++)
    {
