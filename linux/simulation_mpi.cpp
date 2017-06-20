@@ -426,7 +426,7 @@ public:
                        acceleration[index][k] += force;
                    }
                }
-               else if(pythagorean != 0) //Add to vectors for child nodes
+               else if(pythagorean != 0.0) //Add to vectors for child nodes
                {
                   indicesForChildren.push_back(index);
                }
@@ -1053,6 +1053,9 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
 
    std::vector<int> keys;
    keys.reserve(totalParticles);
+   std::vector<int> recvCounts(size);
+   std::vector<int> disp(size); disp[0] = 0;
+   std::vector<int> globalKeys(totalParticles);
 
    #pragma omp parallel for //Not thread safe due to overlapping resizes and writes
    for(int i = 0; i < entryNodes.size(); i++)
@@ -1060,7 +1063,39 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
       tree.buildTree(entryNodes[i], position, indices[i], entryBoundaries[entryOctants[i]], keys);
    }
 
-   //Traverse the tree and sort the particles here
+   if(rank == 1)
+      for(int i = 0; i < keys.size();i++)
+         printf("%i\n",keys[i]);
+      printf("\n");
+
+   //Sort particles so that the particle at the index of the key's value goes to that position
+   //Basic version: Send counts to each process, then send keys, then sort entire list locally
+   recvCounts[rank] = keys.size();
+   MPI_Allgather(MPI_IN_PLACE, size, MPI_INT, &recvCounts[0], size, MPI_INT, MPI_COMM_WORLD);
+   for(int i = 1; i < size; i++)
+      disp[i] = disp[i - 1] + recvCounts[i - 1];
+
+   //Maybe just try a Gatherv?   
+//   MPI_Gatherv(&keys[0], keys.size(), MPI_INT, &globalKeys[0], &recvCounts[0], &disp[0], MPI_INT, 0, MPI_COMM_WORLD);
+   //MPI_Allgatherv(&keys[0], keys.size(), MPI_INT, &globalKeys[0], &recvCounts[0], &disp[0], MPI_INT, MPI_COMM_WORLD);
+
+/*   
+   printf("\n");
+   if(rank == 0)
+   {
+      for(int i = 0; i < size;i++)
+         printf("%i\n", disp[i]);
+      printf("\n");
+
+      for(int i = 0; i < totalParticles; i++)
+         printf("%i %i\n", i, globalKeys[i]); 
+     printf("\n");  
+   }
+*/
+
+   //More advanced version - make size bins of width n/size and bin local particles. Send particles in a bin to
+   //Appropriate processor and have each process sort all particles in a bin.
+   //Then gather the results
 
    //What about the velocity? Sort old data 
 
