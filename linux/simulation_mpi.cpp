@@ -37,9 +37,6 @@ export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
 #include <algorithm>
 
 #define DIM 3
-#define LEAF 0
-#define EMPTY_LEAF 1
-#define BRANCH 2
 
 #define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
@@ -64,9 +61,8 @@ inline double determineVectorFlat(const double p1Pos, const double p2Pos)
 //===================================BEGIN TREE STUFF=========================================
 
 struct Node {
-    float mass;
+    float mass; // < 0 = LEAF, 0 = EMPTY_LEAF, > 0 = BRANCH
     double com[DIM];
-    char nodeType;
     //double myBoundaries[6];
     //Run out of memory if save.
     //double boundaries[8][6];
@@ -241,7 +237,7 @@ public:
             */
 
             #pragma omp critical
-            nodesArray[nodeIndex].nodeType = EMPTY_LEAF;
+            nodesArray[nodeIndex].mass = 0.0f;
 
             /*
             #pragma omp atomic
@@ -262,8 +258,7 @@ public:
             */
             #pragma omp critical
             {
-            nodesArray[nodeIndex].nodeType = LEAF;
-            nodesArray[nodeIndex].mass = 1.0f; //Assume equivalent mass, otherwise will need to modify
+            nodesArray[nodeIndex].mass = -1.0f; //Assume equivalent mass, otherwise will need to modify
             memcpy(&(nodesArray[nodeIndex].com[0]), &position[partIndices[0]][0], DIM*sizeof(double));
             //keys.push_back(partIndices[0]);
             }
@@ -306,7 +301,6 @@ public:
             nodesArray[nodeIndex].com[0] = com0*invSize;
             nodesArray[nodeIndex].com[1] = com1*invSize;
             nodesArray[nodeIndex].com[DIM - 1] = com2*invSize;
-            nodesArray[nodeIndex].nodeType = BRANCH;
             nodesArray[nodeIndex].mass = partIndices.size(); //Assuming mass of one, sum mass
             }
 
@@ -379,7 +373,7 @@ public:
     void calcAcc(int nodeIndex, std::vector<int> &indices, double (*position)[DIM], double (*acceleration)[DIM], double &potentialEnergy)
     {
         //Ensure we are not at bottom of tree and we still have particles to work with
-        if(indices.size() > 0 && nodesArray[nodeIndex].nodeType != EMPTY_LEAF)
+        if(indices.size() > 0 && nodesArray[nodeIndex].mass != 0.0f)
         {
             //Create vector for the next recursion level
             std::vector<int> indicesForChildren;
@@ -389,7 +383,7 @@ public:
             double sigma, sigmaPow6, sigmaPow12;
             double invPy, invPyPow3, invPyPow4, invPyPow6;
             double forceCoeff, pythagorean, force;
-            double cutoff_sq = 1.0;//0.5*0.5;
+            double cutoff_sq = 1.0*1.0;//0.5*0.5;
             float mass_sq = nodesArray[nodeIndex].mass*nodesArray[nodeIndex].mass; 
             double m_over_c = mass_sq / cutoff_sq;
             int j, k, index;
@@ -401,14 +395,13 @@ public:
                pythagorean = 0.0;
                for(j = 0; j < DIM; j++)
                {
-                   //This random access is likely costly, but sorting particles doesn't seem to 
-                   //reduce gap sizes 
+                   //This random access is likely costly, but sorting particles doesn't seem to reduce gap sizes 
                    vectors[j] = determineVectorFlat(position[index][j], nodesArray[nodeIndex].com[j]);
                    pythagorean += vectors[j]*vectors[j];
                }             
 
                //With higher s values may need to decrease timestep. If pythagorean == 0.0 then particle is looking at itself
-               if(m_over_c < pythagorean || (nodesArray[nodeIndex].nodeType == LEAF && pythagorean != 0.0)) //Calculate force
+               if(m_over_c < pythagorean || (nodesArray[nodeIndex].mass < 0.0f && pythagorean != 0.0)) //Calculate force
                {
                    //Guessing this should be an average of sigma values of all involved particles. Since only using type 1 just set to one here.
                    sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);
