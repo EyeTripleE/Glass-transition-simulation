@@ -34,6 +34,7 @@ export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
 #include <omp.h>
 #include <chrono>
 #include "assert.h"
+#include <algorithm>
 
 #define DIM 3
 #define LEAF 0
@@ -63,9 +64,9 @@ inline double determineVectorFlat(const double p1Pos, const double p2Pos)
 //===================================BEGIN TREE STUFF=========================================
 
 struct Node {
-    char nodeType;
     float mass;
     double com[DIM];
+    char nodeType;
     //double myBoundaries[6];
     //Run out of memory if save.
     //double boundaries[8][6];
@@ -208,7 +209,7 @@ public:
         }
     }
 
-    void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double boundaries[6], std::vector<int> &keys)
+    void buildTree(int nodeIndex, double (*position)[DIM], std::vector<int> &partIndices, double boundaries[6]/*, std::vector<int> &keys*/)
     {
         //if(rank == 0) printf("here %d\n", nodeIndex);
         //printf("here %d\n", nodeIndex);
@@ -264,7 +265,7 @@ public:
             nodesArray[nodeIndex].nodeType = LEAF;
             nodesArray[nodeIndex].mass = 1.0f; //Assume equivalent mass, otherwise will need to modify
             memcpy(&(nodesArray[nodeIndex].com[0]), &position[partIndices[0]][0], DIM*sizeof(double));
-            keys.push_back(partIndices[0]);
+            //keys.push_back(partIndices[0]);
             }
             /*
             #pragma omp atomic
@@ -368,8 +369,9 @@ public:
 
             #pragma omp parallel for
             for(int i = 7; i >= 0; i--) //Reduce the number of resizes by going right to left
+            //for(int i = 0; i < 8; i++)            
             {
-                buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], childBoundaries[i], keys);
+                buildTree(8*nodeIndex + (i + 1), position, indicesArray[i], childBoundaries[i]/*, keys*/);
             }
         }
     }
@@ -387,8 +389,9 @@ public:
             double sigma, sigmaPow6, sigmaPow12;
             double invPy, invPyPow3, invPyPow4, invPyPow6;
             double forceCoeff, pythagorean, force;
-            double cutoff_sq = 0.5*0.5;
-            float mass_sq;
+            double cutoff_sq = 1.0;//0.5*0.5;
+            float mass_sq = nodesArray[nodeIndex].mass*nodesArray[nodeIndex].mass; 
+            double m_over_c = mass_sq / cutoff_sq;
             int j, k, index;
 
             //Look at all my particles
@@ -398,14 +401,14 @@ public:
                pythagorean = 0.0;
                for(j = 0; j < DIM; j++)
                {
+                   //This random access is likely costly, but sorting particles doesn't seem to 
+                   //reduce gap sizes 
                    vectors[j] = determineVectorFlat(position[index][j], nodesArray[nodeIndex].com[j]);
                    pythagorean += vectors[j]*vectors[j];
-               }
+               }             
 
-               mass_sq = nodesArray[nodeIndex].mass*nodesArray[nodeIndex].mass;               
-
-               //The higher the s value, the less stable the energy is. If pythagorean == 0.0 then particle is looking at itself
-               if(mass_sq < cutoff_sq*pythagorean || (nodesArray[nodeIndex].nodeType == LEAF && pythagorean != 0.0)) //Calculate force
+               //With higher s values may need to decrease timestep. If pythagorean == 0.0 then particle is looking at itself
+               if(m_over_c < pythagorean || (nodesArray[nodeIndex].nodeType == LEAF && pythagorean != 0.0)) //Calculate force
                {
                    //Guessing this should be an average of sigma values of all involved particles. Since only using type 1 just set to one here.
                    sigma = 1.0;//(i < particlesType1 && j < particlesType1) ? 1.0 : ((i >= particlesType1 && j >= particlesType1) ? 1.4 : 1.2);
@@ -423,7 +426,7 @@ public:
                    {
                        force = vectors[k]*forceCoeff;
                        #pragma omp atomic update //Sibling nodes could try to update
-                       acceleration[index][k] += force;
+                       acceleration[index][k] += force; //Another random access
                    }
                }
                else if(pythagorean != 0.0) //Add to vectors for child nodes
@@ -463,7 +466,7 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
                            MPI_Request &request);
 
 //Barnes-Hut version
-void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
+void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM], double (*oldPosition)[DIM],
                         int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
                         Tree &tree, std::vector<int> indices[8], std::vector<int> &allIndices, std::vector<int> &entryNodes,
                         double entryBoundaries[8][6], int entryOctants[8], MPI_Request &request);
@@ -583,8 +586,8 @@ int main(int argc, char* argv[])
 #endif
 
     //Set time related variables
-    double timestep = 0.005; //Can be arbitrarily small
-    double maxTime = 5; //Can be arbitrarily long or short
+    double timestep = 0.00005; //Can be arbitrarily small
+    double maxTime = 1000*timestep; //Can be arbitrarily long or short
     double invTimestep = 1.0/timestep; //needed for KE
     double dtsq = timestep*timestep;
     double currentTime = 0;
@@ -656,7 +659,7 @@ int main(int argc, char* argv[])
     auto start_time = std::chrono::high_resolution_clock::now(); //Start the timer
 
 #if defined(BARNES_HUT)
-    calcAccelerationBH(acceleration, position, myStart, myEnd, rank, size, numParticlesType1, energies[1],
+    calcAccelerationBH(acceleration, position, oldPosition, myStart, myEnd, rank, size, numParticlesType1, energies[1],
                        tree, indices, allIndices, entryNodes, entryBoundaries, entryOctants, request);
 #elif defined(TILES)
     calcAccelerationTiles(acceleration, position, myStart, myEnd, rowStart, rowEnd, columnStart,
@@ -676,7 +679,7 @@ int main(int argc, char* argv[])
     for (currentTime = 2*timestep; currentTime < maxTime; currentTime += timestep)
     {
 #if defined(BARNES_HUT)
-        calcAccelerationBH(acceleration, position, myStart, myEnd, rank, size,
+        calcAccelerationBH(acceleration, position, oldPosition, myStart, myEnd, rank, size,
                            numParticlesType1, energies[1], tree, indices, allIndices, entryNodes,
                            entryBoundaries, entryOctants, request);
 #elif defined(TILES)
@@ -991,7 +994,7 @@ void calcAccelerationTiles(double (*acceleration)[DIM], double (*position)[DIM],
     potentialEnergy = pe;
 }
 
-void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
+void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM], double (*oldPosition)[DIM],
                         int myStart, int myEnd, int rank, int size, int particlesType1, double &potentialEnergy,
                         Tree &tree, std::vector<int> indices[8], std::vector<int> &allIndices, std::vector<int> &entryNodes,
                         double entryBoundaries[8][6], int entryOctants[8], MPI_Request &request)
@@ -999,9 +1002,13 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
     int localParticles = myEnd - myStart;
     int localSize = DIM*localParticles;
 
+    //MPI_Request requests[2];
     //This is expensive, need to get rid of
     MPI_Iallgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, position,
                    localSize, MPI_DOUBLE, MPI_COMM_WORLD, &request);
+    //Only one process has the updated oldPosition information. 
+    //MPI_Iallgather(MPI_IN_PLACE, localSize, MPI_DOUBLE, oldPosition,
+    //               localSize, MPI_DOUBLE, MPI_COMM_WORLD, &requests[1]);
 
     int totalParticles = size*localParticles;
     int totalSize = localSize*size;
@@ -1019,6 +1026,7 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
     }
 
     MPI_Wait(&request, MPI_STATUS_IGNORE);
+    //MPI_Waitall(2, requests, MPI_STATUSES_IGNORE);
 
     //Maybe overlap the tree building and communication? How?
     //Not necessary. Tree building is not a significant cost.
@@ -1051,60 +1059,98 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM],
         }
     }
 
+   /*
    std::vector<int> keys;
    keys.reserve(totalParticles);
    std::vector<int> recvCounts(size);
    std::vector<int> disp(size); disp[0] = 0;
    std::vector<int> globalKeys(totalParticles);
+   */
 
    #pragma omp parallel for //Not thread safe due to overlapping resizes and writes
    for(int i = 0; i < entryNodes.size(); i++)
    {
-      tree.buildTree(entryNodes[i], position, indices[i], entryBoundaries[entryOctants[i]], keys);
+      tree.buildTree(entryNodes[i], position, indices[i], entryBoundaries[entryOctants[i]]/*, keys*/);
    }
-
-   if(rank == 1)
-      for(int i = 0; i < keys.size();i++)
-         printf("%i\n",keys[i]);
-      printf("\n");
 
    //Sort particles so that the particle at the index of the key's value goes to that position
    //Basic version: Send counts to each process, then send keys, then sort entire list locally
+   
+   /*
    recvCounts[rank] = keys.size();
-   MPI_Allgather(MPI_IN_PLACE, size, MPI_INT, &recvCounts[0], size, MPI_INT, MPI_COMM_WORLD);
+   MPI_Allgather(MPI_IN_PLACE, 1, MPI_INT, &recvCounts[0], 1, MPI_INT, MPI_COMM_WORLD);
+
    for(int i = 1; i < size; i++)
       disp[i] = disp[i - 1] + recvCounts[i - 1];
 
-   //Maybe just try a Gatherv?   
-//   MPI_Gatherv(&keys[0], keys.size(), MPI_INT, &globalKeys[0], &recvCounts[0], &disp[0], MPI_INT, 0, MPI_COMM_WORLD);
-   //MPI_Allgatherv(&keys[0], keys.size(), MPI_INT, &globalKeys[0], &recvCounts[0], &disp[0], MPI_INT, MPI_COMM_WORLD);
+   MPI_Allgatherv(&keys[0], keys.size(), MPI_INT, &globalKeys[0], &recvCounts[0], &disp[0], MPI_INT, MPI_COMM_WORLD);
 
-/*   
-   printf("\n");
+   //Why is it completely different each time? Shouldn't consecutive trees
+   //be nearly identical?  
+   */
+   /*
    if(rank == 0)
    {
-      for(int i = 0; i < size;i++)
-         printf("%i\n", disp[i]);
-      printf("\n");
-
       for(int i = 0; i < totalParticles; i++)
-         printf("%i %i\n", i, globalKeys[i]); 
-     printf("\n");  
-   }
-*/
+      {
+         printf("%d %d\n", globalKeys[i], allIndices[i]);
+      }
+      printf("\n\n");
+   } 
+   */
+   
 
    //More advanced version - make size bins of width n/size and bin local particles. Send particles in a bin to
    //Appropriate processor and have each process sort all particles in a bin.
    //Then gather the results
 
-   //What about the velocity? Sort old data 
+   //Put particles data in correct location.
+   
+   /*
+   double temp[DIM];
+   int index;
+   int s = DIM*sizeof(double);
+   for(int i = 0; i < totalParticles - 1; i++)
+   {
+      index = globalKeys[i];
+      while(i != index)
+      {
+         //Swap data, data at index will be in correct location
+         memcpy(&temp[0], &position[index][0], s);
+         memcpy(&position[index][0], &position[i][0], s);
+         memcpy(&position[i][0], &temp[0], s);
 
+         memcpy(&temp[0], &oldPosition[index][0], s);
+         memcpy(&oldPosition[index][0], &oldPosition[i][0], s);
+         memcpy(&oldPosition[i][0], &temp[0], s);
+         
+         //Update keys
+         globalKeys[i] = globalKeys[index];
+         globalKeys[index] = index;
+         index = globalKeys[i];             
+      }
+   }   
+   */
+
+   /*
+   if(rank == 0)
+   {
+      for(int i = 0; i < totalParticles; i++)
+      {
+         printf("%d %d\n", globalKeys[i], allIndices[i]);
+      }
+      printf("\n\n");
+   } 
+   */
+   
+   //Most time spent here.
    #pragma omp parallel for reduction(+:pe) //Can't do in above loop because tree resizes 
    for(int i = 0; i < entryNodes.size(); i++)
    {
       tree.calcAcc(entryNodes[i], allIndices, position, acceleration, pe);
    }
 
+   //Is the problem that not all ranks have updated oldPosition?
    MPI_Ireduce_scatter_block(MPI_IN_PLACE, acceleration,
                            localSize, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD, &request);
 
