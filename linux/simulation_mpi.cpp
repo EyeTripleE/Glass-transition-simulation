@@ -383,7 +383,7 @@ public:
             double sigma, sigmaPow6, sigmaPow12;
             double invPy, invPyPow3, invPyPow4, invPyPow6;
             double forceCoeff, pythagorean, force;
-            double cutoff_sq = 1.0*1.0;//0.5*0.5;
+            double cutoff_sq = 5.0;//1.0*1.0;//0.5*0.5;
             float mass_sq = nodesArray[nodeIndex].mass*nodesArray[nodeIndex].mass; 
             double m_over_c = mass_sq / cutoff_sq;
             int j, k, index;
@@ -1010,7 +1010,6 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM], do
     //http://stackoverflow.com/questions/4629853/is-it-legal-to-use-memset-0-on-array-of-doubles
     memset(acceleration, 0, totalSize*sizeof(double));
     double pe = 0;
-    bool inside;
     int j, k;
 
     for(int i = 0; i < entryNodes.size(); i++)
@@ -1026,23 +1025,18 @@ void calcAccelerationBH(double (*acceleration)[DIM], double (*position)[DIM], do
 
     //Loop over particles and add it to the corresponding list of particles
     //if it is inside one of my octants
-    #pragma omp parallel for private(j, inside, k)
+    #pragma omp parallel for private(j, k)
     for(int i = 0; i < totalParticles; i++)
     {
         for(j = 0; j < entryNodes.size(); j++)
         {
-            inside = true;
-            for(k = 0; k < 3; k++)
+            for(k = 0; k < 3 && position[i][k] > entryBoundaries[entryOctants[j]][2*k] &&
+                        position[i][k] <= entryBoundaries[entryOctants[j]][2*k + 1]; k++)
             {
-                if(position[i][k] < entryBoundaries[entryOctants[j]][2*k] ||
-                        position[i][k] > entryBoundaries[entryOctants[j]][2*k + 1])
-                {
-                    inside = false;
-                    break;
-                }
+
             }
 
-            if(inside)
+            if(k == 3)
             {
                 #pragma omp critical
                 indices[j].push_back(i);
