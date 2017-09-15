@@ -38,10 +38,10 @@ export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
 
 #define DIM 3
 
-#define BARNES_HUT //Barnes Hut, tiles, or strips?
+//#define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
-#define CUTOFF //If strips, use cutoff distance or not?
-#define OUTPUT //print output?
+//#define CUTOFF //If tiles and strips, use cutoff distance or not?
+//#define OUTPUT //print output?
 
 //===================================BEGIN FUNCTION HEADERS===================================
 //Determines shortest vector from particle 1 to particle 2 (including across boundary) in one direction
