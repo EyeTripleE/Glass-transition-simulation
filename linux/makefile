@@ -12,6 +12,12 @@ MPICXX=$(CC) -g $(OPT_LEVEL) -std=c++11 $(OMP)
 bh:  simulation_bh.cpp
 		$(MPICXX) -o n_body_simulation simulation_bh.cpp
 
+bh1:  simulation_bh_1.cpp
+		$(MPICXX) -o n_body_simulation simulation_bh_1.cpp
+
+bh3:  simulation_bh_3.cpp
+		$(MPICXX) -o n_body_simulation simulation_bh_3.cpp
+
 strips:  simulation_strips.cpp
 		$(MPICXX) -o n_body_simulation simulation_strips.cpp
 

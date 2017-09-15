@@ -29,17 +29,17 @@ function run_hybrid() {
   done
 }
 
-targets=(bh strips strips_cutoff tiles tiles_cutoff)
+targets=(bh bh1 bh3 strips strips_cutoff tiles tiles_cutoff)
 
 for t in ${targets[@]}; do
-##  make clean
-##  echo "Building target $t"
-##  make $t &
-##  pid=$!
-##  wait $pid
-##
-##  echo 'Running MPI benchmarks'
-##  run_mpi $t
+  make clean
+  echo "Building target $t"
+  make $t &
+  pid=$!
+  wait $pid
+
+  echo 'Running MPI benchmarks'
+  run_mpi $t
 
   make clean
   echo "Building target $t with MPI+OpenMP"

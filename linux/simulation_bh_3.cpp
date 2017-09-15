@@ -383,7 +383,7 @@ public:
             double sigma, sigmaPow6, sigmaPow12;
             double invPy, invPyPow3, invPyPow4, invPyPow6;
             double forceCoeff, pythagorean, force;
-            double cutoff_sq = 0.5;//1.0*1.0;//0.5*0.5;
+            double cutoff_sq = 3;//1.0*1.0;//0.5*0.5;
             float mass_sq = nodesArray[nodeIndex].mass*nodesArray[nodeIndex].mass; 
             double m_over_c = mass_sq / cutoff_sq;
             int j, k, index;
