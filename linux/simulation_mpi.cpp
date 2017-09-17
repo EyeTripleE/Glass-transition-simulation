@@ -16,11 +16,11 @@ export OMP_NUM_THREADS=<value>
 export OMP_THREAD_LIMIT=<equal to OMP_NUM_THREADS>
 export OMP_NESTED=TRUE
 
-or
+or on Intel Xeon Phi
 export KMP_HOT_TEAMS_MODE=1
 export KMP_HOT_TEAMS_MAX_LEVEL=2
 export KMP_PLACE_THREADS = 1T
-export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
+export KMP_AFFINITY=compact,granularity=fine
 */
 
 #include <cmath>
@@ -141,10 +141,7 @@ public:
 
         int level = floor( log(nodeIndex + 1) / log(8.0) ); //Get level of current node index
         int levelNodes = 1;
-        for(int i = 0; i < level; i++)
-        {
-            levelNodes *= 8;
-        }
+        for(int i = 0; i < level; i++) levelNodes *= 8;        
         int nextLevelNodes = levelNodes * 8;
         int index = (rank % nextLevelNodes) / levelNodes; //Convert rank to branch number
 
