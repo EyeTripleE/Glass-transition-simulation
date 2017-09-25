@@ -19,7 +19,7 @@ export OMP_NESTED=TRUE
 or on Intel Xeon Phi
 export KMP_HOT_TEAMS_MODE=1
 export KMP_HOT_TEAMS_MAX_LEVEL=2
-export KMP_PLACE_THREADS = 1T
+export KMP_PLACE_THREADS=1T
 export KMP_AFFINITY=compact,granularity=fine
 */
 
