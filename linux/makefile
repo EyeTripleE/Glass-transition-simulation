@@ -1,10 +1,10 @@
 SHELL=/bin/bash
-CC=mpicxx
+CC=mpiicc
 OPT_LEVEL=-O3
 OMP=
 
 ifeq ($(USE_OMP),1)
-  OMP=-fopenmp
+  OMP=-qopenmp
 endif
 
 MPICXX=$(CC) -g $(OPT_LEVEL) -std=c++11 $(OMP)
