@@ -57,7 +57,6 @@ plot  'bh.hybrid.1024' using 3:7 with linespoints,   \
              'tiles.mpi.4096' using 3:7 with linespoints,   \
              'tiles.mpi.8192' using 3:7 with linespoints 
 
-
 set logscale y
 set logscale x 2
 set xlabel 'MPI Ranks'
