@@ -1,0 +1,34 @@
+Ranks = 1 Time taken = 891514612421
+
+===================================================================================
+=   BAD TERMINATION OF ONE OF YOUR APPLICATION PROCESSES
+=   PID 55795 RUNNING AT donquixote.cs.illinois.edu
+=   EXIT CODE: 134
+=   CLEANING UP REMAINING PROCESSES
+=   YOU CAN IGNORE THE BELOW CLEANUP MESSAGES
+===================================================================================
+
+===================================================================================
+=   BAD TERMINATION OF ONE OF YOUR APPLICATION PROCESSES
+=   PID 55795 RUNNING AT donquixote.cs.illinois.edu
+=   EXIT CODE: 6
+=   CLEANING UP REMAINING PROCESSES
+=   YOU CAN IGNORE THE BELOW CLEANUP MESSAGES
+===================================================================================
+   Intel(R) MPI Library troubleshooting guide:
+      https://software.intel.com/node/561764
+===================================================================================
+Ranks = 4 Time taken = 223083865358
+Error: Number of processes is not a (small) factor of 1024
+Error: Number of processes is not a (small) factor of 1024
+Error: Number of processes is not a (small) factor of 1024
+Error: Number of processes is not a (small) factor of 1024
+Error: Number of processes is not a (small) factor of 1024
+Ranks = 16 Time taken = 55951164415
+Error: Number of processes is not a (small) factor of 1024
+Error: Number of processes is not a (small) factor of 1024
+Error: Number of processes is not a (small) factor of 1024
+Error: Number of processes is not a (small) factor of 1024
+Error: Number of processes is not a (small) factor of 1024
+Error: Number of processes is not a (small) factor of 1024
+Ranks = 64 Time taken = 14316721599

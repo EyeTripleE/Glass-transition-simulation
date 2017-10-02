@@ -40,7 +40,7 @@ export KMP_AFFINITY=compact,granularity=fine //On Intel Xeon Phi
 
 //#define BARNES_HUT //Barnes Hut, tiles, or strips?
 //#define TILES
-//#define CUTOFF //If tiles and strips, use cutoff distance or not?
+#define CUTOFF //If tiles and strips, use cutoff distance or not?
 //#define OUTPUT //print output?
 
 //===================================BEGIN FUNCTION HEADERS===================================
