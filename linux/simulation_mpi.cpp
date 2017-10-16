@@ -145,7 +145,7 @@ public:
         int nextLevelNodes = levelNodes * 8;
         int index = (rank % nextLevelNodes) / levelNodes; //Convert rank to branch number
 
-        if(size > nextLevelNodes) //Too many processors, divide them to work on children
+        if(size >= nextLevelNodes) //Too many processors, divide them to work on children
         {
             //Take next branch down the tree
             determineEntryPoints(8*nodeIndex + (index + 1), childBoundaries[index],
