@@ -22,10 +22,12 @@ function run_hybrid() {
   for size in ${sizes[@]}; do
     for rnk in ${ranks[@]}; do
        export KMP_HOT_TEAMS_MODE=1
-       if [ $rnk -gt 8 ]; then
-         export KMP_HOT_TEAMS_MAX_LEVEL=3
-       else
+       if [ $rnk -ge 8 ]; then
+         export KMP_HOT_TEAMS_MAX_LEVEL=1
+       elif [$rnk -ge 4]
          export KMP_HOT_TEAMS_MAX_LEVEL=2
+       else
+         export KMP_HOT_TEAMS_MAX_LEVEL=3
        fi
        export KMP_PLACE_THREADS=1T
        export KMP_AFFINITY=compact,granularity=fine
