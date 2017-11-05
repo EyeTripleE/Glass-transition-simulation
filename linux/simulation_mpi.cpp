@@ -7,8 +7,8 @@
 //NOTE: If running with OpenMP, make sure OMP_THREAD_LIMIT is set (e.g. export OMP_THREAD_LIMIT=5).
 //This should probably be equal to OMP_NUM_THREADS.
 
-//TODO: Add softening if ever use this again, figure out how to overlap communication and
-//computation more in Barnes-Hut
+//TODO: Add softening if ever use this again, figure out how to Speed up BH force
+//calculation. Use 'restrict' keywork
 
 //README!!!!!!!!!!!!! IMPORTANT: Set these environment variables before running
 /*
