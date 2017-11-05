@@ -412,15 +412,12 @@ public:
                    potentialEnergy += 2.0 * ((sigmaPow12 * invPyPow6) - (sigmaPow6 * invPyPow3));
                    forceCoeff = (sigmaPow6 * invPyPow4) * ((48.0 * sigmaPow6 * invPyPow3) - 24.0);
 
-		   force = 0.0;
-                   for(k = 0; k < DIM; k++)
+		   for(k = 0; k < DIM; k++)
                    {
-                       force += vectors[k]*forceCoeff;
-                       //#pragma omp atomic update //Sibling nodes could try to update
-                       //acceleration[index][k] += force; //Another random access
+                       force = vectors[k]*forceCoeff;
+                       #pragma omp atomic update //Sibling nodes could try to update
+                       acceleration[index][k] += force; //Another random access
                    }
-                   #pragma omp atomic update
-                   acceleration[index][k] += force;
                }
                else if(pythagorean != 0.0) //Add to vectors for child nodes
                {
